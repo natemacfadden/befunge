@@ -14,6 +14,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 SANITIZE_RE = re.compile(r'\\x([0-9a-fA-F]{2})')
 
@@ -37,23 +39,41 @@ def _resolve(subdir, default_name, path):
         path = os.path.join(_HERE, subdir, path)
     return path
 
-def load_programs(path=None):
+def load_programs(path=None, n=None):
+    """Load the random-programs dataset.
+
+    `n`: optional row limit. With `n` set, reads only the first n rows from
+    the parquet via streaming row-group iteration (way faster than loading
+    the whole file and slicing)."""
     path = _resolve('random_programs', 'dataset.parquet', path)
-    df = pd.read_parquet(path)
+    if n is None:
+        df = pd.read_parquet(path)
+    else:
+        pf = pq.ParquetFile(path)
+        chunks, rows = [], 0
+        for batch in pf.iter_batches(batch_size=min(n, 50000)):
+            chunks.append(batch)
+            rows += batch.num_rows
+            if rows >= n:
+                break
+        df = pa.Table.from_batches(chunks).to_pandas().iloc[:n].copy()
     # Older datasets carry both `program` (raw) and `pruned_program`. The
     # raw form has cells the interpreter never touched, so we prefer the
     # pruned one and drop the raw column.
     if 'pruned_program' in df.columns:
         df['program'] = df['pruned_program']
         df = df.drop(columns=['pruned_program'])
-    # Count "active" (non-space, non-newline) chars before we repr-wrap the
-    # program. With the pruning step, this is the size of the live program.
-    sizes = df['program'].map(lambda s: sum(1 for c in s if c not in ' \n'))
-    # Render the program as repr() so Jupyter shows it as a single escaped
-    # line instead of wrapping at every '\n'. `to_clipboard` undoes this
-    # automatically when copying.
-    df['program'] = df['program'].map(repr)
+    # Count "active" (non-space, non-newline) chars via two replaces + len.
+    # Faster on ~1M rows than separate str.count calls.
+    sizes = (df['program'].str.replace(' ', '', regex=False)
+                          .str.replace('\n', '', regex=False)
+                          .str.len())
     df.insert(df.columns.get_loc('program') + 1, 'program_size', sizes)
+    # Output length in actual bytes: each `\xNN` escape (4 chars) was 1 byte,
+    # so subtract 3 chars per escape from the sanitized length.
+    out_sizes = (df['output'].str.len()
+                 - 3 * df['output'].str.count(r'\\x[0-9a-fA-F]{2}'))
+    df.insert(df.columns.get_loc('output') + 1, 'output_size', out_sizes)
     return df
 
 def to_clipboard(text):

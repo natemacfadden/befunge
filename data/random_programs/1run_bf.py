@@ -32,17 +32,23 @@ def process_record(args_tuple):
     rec, max_steps, max_output, jit = args_tuple
     program = rec['program']
     try:
-        status, raw_str, visited = run_traced(program, max_steps=max_steps, jit=jit)
+        status, raw_str, visited, final_stack = run_traced(program, max_steps=max_steps, jit=jit)
     except Exception:
-        status, raw_str, visited = 'error', '', None
+        status, raw_str, visited, final_stack = 'error', '', None, []
     raw_str = raw_str[:max_output]
     rec_out = dict(rec)
-    # Replace `program` with the pruned version — cells that the IP never
-    # visited (and `g` never read) become spaces. We drop the un-pruned
-    # original since it carries no information the interpreter ever used.
-    rec_out['program'] = prune_program(program, visited) if visited is not None else program
+    # Only prune when the program halted naturally — then `visited` is the
+    # complete set of cells the program ever needed and the pruned version
+    # is exactly equivalent. For `step_limit` or `error`, we don't know
+    # what cells would have mattered past the truncation point, so we
+    # leave the program untouched.
+    if status == 'ok' and visited is not None:
+        rec_out['program'] = prune_program(program, visited)
+    else:
+        rec_out['program'] = program
     rec_out['output'] = sanitize(raw_str)
     rec_out['status'] = status
+    rec_out['final_stack'] = final_stack
     return rec_out
 
 def iter_programs(path):
@@ -60,7 +66,8 @@ if __name__ == '__main__':
     p.add_argument('--max-output', type=int, default=4096)
     p.add_argument('--workers', type=int, default=os.cpu_count())
     p.add_argument('--progress-every', type=int, default=10000)
-    p.add_argument('--jit', action='store_true', help='use numba-JIT interpreter')
+    p.add_argument('--no-jit', dest='jit', action='store_false',
+                   help='disable the numba-JIT interpreter (default: on)')
     p.add_argument('--batch-size', type=int, default=50000,
                    help='records per parquet row-group write')
     args = p.parse_args()
@@ -70,6 +77,8 @@ if __name__ == '__main__':
     print(f'{total_records} programs from {args.in_path}, {args.workers} workers')
 
     counts = {'ok': 0, 'error': 0, 'step_limit': 0}
+    seen = set()  # exact program strings we've already written
+    dropped = 0
     t0 = time.time()
 
     work_iter = ((rec, args.max_steps, args.max_output, args.jit)
@@ -90,12 +99,19 @@ if __name__ == '__main__':
     with ProcessPoolExecutor(args.workers) as pool:
         for i, rec_out in enumerate(
                 pool.map(process_record, work_iter, chunksize=64), 1):
-            batch.append(rec_out)
-            counts[rec_out['status']] += 1
+            # Dedup by the (post-pruning) program text. After pruning, many
+            # source programs collapse to the same minimal form — keep one.
+            if rec_out['program'] in seen:
+                dropped += 1
+            else:
+                seen.add(rec_out['program'])
+                batch.append(rec_out)
+                counts[rec_out['status']] += 1
             if i % args.progress_every == 0:
                 rate = i / (time.time() - t0)
                 eta = (total_records - i) / rate
-                print(f'  [{i}/{total_records}]  {rate:.0f} rec/s  eta {eta:.0f}s')
+                print(f'  [{i}/{total_records}]  {rate:.0f} rec/s  eta {eta:.0f}s, '
+                      f'{dropped} dup')
             if len(batch) >= args.batch_size:
                 flush(batch)
                 batch = []
@@ -105,4 +121,7 @@ if __name__ == '__main__':
         writer.close()
 
     dt = time.time() - t0
-    print(f'\nwrote {args.out}: {counts}  ({dt:.1f}s, {total_records/max(dt,1e-9):.0f} rec/s)')
+    kept = total_records - dropped
+    print(f'\nwrote {args.out}: {counts}  '
+          f'({kept} unique kept, {dropped} dups dropped, '
+          f'{dt:.1f}s, {total_records/max(dt,1e-9):.0f} rec/s)')
