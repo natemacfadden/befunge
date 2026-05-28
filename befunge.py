@@ -18,6 +18,7 @@ from numba import njit
 # Befunge-93 in brief (see https://esolangs.org/wiki/Befunge for the full
 # reference). A program runs on a "playfield" — for us, a fixed 80x25 grid of
 # ASCII characters. An "instruction pointer" (IP) travels through that grid,
+# executing whatever character it lands on. Most instructions read and write a
 # stack of int64 values ("in the manner of Forth"). The IP has inertia: it
 # keeps moving in its current cardinal direction until an instruction changes
 # it. While "string mode" is active (toggled by `"`), characters are pushed
