@@ -1,6 +1,7 @@
 import sys
 
 import numpy as np
+from numba import njit
 
 # Befunge-93 instruction set, grouped by category. Space is a no-op and pads
 # the playfield; newline separates rows in source.
@@ -41,8 +42,9 @@ def src_to_grid(src):
 
 def _run_core(grid, max_steps, stack, out_buf):
     """Shared dispatch loop. Numba-friendly: no Python objects, just int ops on
-    pre-allocated arrays. `befunge_jit.py` applies @njit to this exact function;
-    here it runs unjitted. Returns (status, out_len). status: 0=ok, 1=step_limit.
+    pre-allocated arrays. `run(jit=True)` calls a @njit-wrapped copy of this
+    function; `run(jit=False)` calls it unjitted. Returns (status, out_len);
+    status: 0=ok, 1=step_limit.
 
     `&` and `~` (interactive input) are treated as `push(0)` since the core
     can't block on stdin — random programs don't generate these anyway."""
@@ -222,18 +224,28 @@ def _run_core(grid, max_steps, stack, out_buf):
     return 1, out_len
 
 
-def run(src, max_steps=None, out=None, _core=_run_core):
-    """Run a Befunge program. Pass `_core=njit_core` to use a JIT-compiled core."""
+# Lazily compiled JIT version of _run_core. First `run(..., jit=True)` call
+# pays the compile cost (~1s, cached after); subsequent calls are fast.
+_run_core_jit = njit(cache=True)(_run_core)
+
+# Reusable buffers — only one set per process. Not threadsafe; this is fine
+# under multiprocessing (one process per worker) but would need rethinking
+# if called from multiple threads.
+_STACK = np.zeros(65536, dtype=np.int64)
+_OUTBUF = np.zeros(8192, dtype=np.int32)
+
+
+def run(src, max_steps=None, out=None, jit=False):
+    """Run a Befunge program. Set `jit=True` for the numba-compiled hot path."""
     if out is None:
         out = sys.stdout
     if max_steps is None:
         max_steps = 1 << 62
     grid = src_to_grid(src)
-    stack = np.zeros(65536, dtype=np.int64)
-    out_buf = np.zeros(8192, dtype=np.int32)
-    status, n = _core(grid, max_steps, stack, out_buf)
+    core = _run_core_jit if jit else _run_core
+    status, n = core(grid, max_steps, _STACK, _OUTBUF)
     if n > 0:
-        out.write(''.join(chr(int(b)) for b in out_buf[:n]))
+        out.write(''.join(chr(int(b)) for b in _OUTBUF[:n]))
     return 'ok' if status == 0 else 'step_limit'
 
 
@@ -242,8 +254,9 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('file')
     p.add_argument('--max-steps', type=int, default=None)
+    p.add_argument('--jit', action='store_true')
     args = p.parse_args()
     with open(args.file) as f:
-        status = run(f.read(), max_steps=args.max_steps)
+        status = run(f.read(), max_steps=args.max_steps, jit=args.jit)
     if status == 'step_limit':
         sys.stderr.write(f'\n[step limit {args.max_steps} reached]\n')

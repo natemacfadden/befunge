@@ -8,22 +8,9 @@ sys.path.insert(0, os.path.dirname(_HERE))
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from befunge import PLAYFIELD
+from interpreter.befunge import PLAYFIELD, run
 
 PLAYFIELD_SET = set(PLAYFIELD)
-
-# `run` resolved per-worker so multiprocessing picks up the right interpreter
-# (numba's JIT-compiled state can't be inherited via fork safely on every OS).
-_run = None
-def _get_run(jit):
-    global _run
-    if _run is None:
-        if jit:
-            from befunge_jit import run as r
-        else:
-            from befunge import run as r
-        _run = r
-    return _run
 
 def sanitize(s):
     out = []
@@ -37,11 +24,10 @@ def sanitize(s):
 
 def process_record(args_tuple):
     rec, max_steps, max_output, jit = args_tuple
-    run = _get_run(jit)
     program = rec['program']
     buf = io.StringIO()
     try:
-        status = run(program, max_steps=max_steps, out=buf)
+        status = run(program, max_steps=max_steps, out=buf, jit=jit)
     except Exception:
         status = 'error'
     raw_str = buf.getvalue()[:max_output]
