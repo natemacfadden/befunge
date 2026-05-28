@@ -4,8 +4,8 @@
 #
 # -----------------------------------------------------------------------------
 # Description:  Load a parquet dataset into a pandas DataFrame. Supports
-#               random_programs datasets (adds derived columns for output
-#               length and UNK stats) and OEIS sequences
+#               random_programs datasets (adds raw + length derived columns)
+#               and OEIS sequences
 # -----------------------------------------------------------------------------
 
 import os, re, sys
@@ -15,9 +15,6 @@ sys.path.insert(0, os.path.dirname(_HERE))
 
 import pandas as pd
 
-from befunge import ALPHABET
-
-ALPHABET_SET = set(ALPHABET)
 SANITIZE_RE = re.compile(r'\\x([0-9a-fA-F]{2})')
 
 def unsanitize(s):
@@ -43,18 +40,34 @@ def _resolve(subdir, default_name, path):
 def load_programs(path=None):
     path = _resolve('random_programs', 'dataset.parquet', path)
     df = pd.read_parquet(path)
-    df['output_raw'] = df['output'].map(unsanitize)
-    df['output_len'] = df['output_raw'].str.len()
-    df['unk_count'] = df['output_raw'].map(
-        lambda s: sum(1 for c in s if c not in ALPHABET_SET))
-    df['unk_frac'] = (df['unk_count'] / df['output_len'].clip(lower=1)).where(
-        df['output_len'] > 0, 0.0)
+    # Older datasets carry both `program` (raw) and `pruned_program`. The
+    # raw form has cells the interpreter never touched, so we prefer the
+    # pruned one and drop the raw column.
+    if 'pruned_program' in df.columns:
+        df['program'] = df['pruned_program']
+        df = df.drop(columns=['pruned_program'])
+    # Count "active" (non-space, non-newline) chars before we repr-wrap the
+    # program. With the pruning step, this is the size of the live program.
+    sizes = df['program'].map(lambda s: sum(1 for c in s if c not in ' \n'))
+    # Render the program as repr() so Jupyter shows it as a single escaped
+    # line instead of wrapping at every '\n'. `to_clipboard` undoes this
+    # automatically when copying.
+    df['program'] = df['program'].map(repr)
+    df.insert(df.columns.get_loc('program') + 1, 'program_size', sizes)
     return df
 
 def to_clipboard(text):
-    """Copy `text` to the system clipboard. Run the GUI separately and Cmd+V
-    to paste — handy for inspecting a program from a DataFrame."""
-    import platform, subprocess
+    """Copy `text` to the system clipboard and print it. Run the GUI separately
+    and Cmd+V to paste — handy for inspecting a program from a DataFrame.
+
+    If `text` looks like a Python repr of a string (since `load_programs`
+    repr-wraps the program column for display), it's auto-unwrapped first."""
+    import ast, platform, subprocess
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        try:
+            text = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            pass
     sysname = platform.system()
     if sysname == 'Darwin':
         cmd = ['pbcopy']

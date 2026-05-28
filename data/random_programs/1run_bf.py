@@ -37,9 +37,12 @@ def process_record(args_tuple):
         status, raw_str, visited = 'error', '', None
     raw_str = raw_str[:max_output]
     rec_out = dict(rec)
+    # Replace `program` with the pruned version — cells that the IP never
+    # visited (and `g` never read) become spaces. We drop the un-pruned
+    # original since it carries no information the interpreter ever used.
+    rec_out['program'] = prune_program(program, visited) if visited is not None else program
     rec_out['output'] = sanitize(raw_str)
     rec_out['status'] = status
-    rec_out['pruned_program'] = prune_program(program, visited) if visited is not None else program
     return rec_out
 
 def iter_programs(path):
