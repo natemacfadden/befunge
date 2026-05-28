@@ -35,6 +35,7 @@ class Interpreter:
         self.state    = new_state()
         self.halted   = False
         self.error    = None
+        self.g_target = None   # (x, y) of last `g` read, or None
 
     def snapshot(self):
         sp = int(self.state[S_SP])
@@ -44,19 +45,31 @@ class Interpreter:
                 self._out_buf[:n].copy(),
                 self.state.copy(),
                 self.halted,
-                self.error)
+                self.error,
+                self.g_target)
 
     def restore(self, snap):
-        g, s, ob, st, h, e = snap
+        g, s, ob, st, h, e, gt = snap
         self._grid[:] = g
         self.state[:] = st
         self._stack[:len(s)] = s
         self._out_buf[:len(ob)] = ob
         self.halted = h
         self.error = e
+        self.g_target = gt
 
     def step(self):
         if self.halted: return
+        # Peek BEFORE stepping: if the IP is about to execute `g`, we can
+        # predict exactly which cell it'll read (top two stack values, with
+        # `g` semantics — y on top, x below, wrapped mod (H, W)).
+        c = int(self._grid[self.y, self.x])
+        self.g_target = None
+        if not self.string_mode and c == ord('g'):
+            sp = int(self.state[S_SP])
+            gy = int(self._stack[sp - 1]) if sp >= 1 else 0
+            gx = int(self._stack[sp - 2]) if sp >= 2 else 0
+            self.g_target = (gx % W, gy % H)
         try:
             status = _run_core(self._grid, 1, self._stack, self._out_buf, self.state, _VISITED_DUMMY)
         except Exception as e:
@@ -103,6 +116,7 @@ class BefungeGrid(tk.Frame):
     IP_COLOR       = '#ffe066'
     CURSOR_OUTLINE = '#3399ff'
     MOD_OUTLINE    = '#dd4444'  # cells touched by `p` get this border
+    READ_OUTLINE   = '#44aa44'  # cells read by `g` get this border
 
     def __init__(self, parent, cols=W, rows=H, cell_w=9, cell_h=14,
                  font=None, editable=False, on_change=None):
@@ -139,6 +153,7 @@ class BefungeGrid(tk.Frame):
         self._cursor_rect   = None
         self._cursor        = (0, 0)
         self._modified_rect = None  # single moving outline for the latest `p`
+        self._read_rect     = None  # single moving outline for the latest `g`
 
         if editable:
             self.canvas.bind('<Button-1>', self._on_click)
@@ -206,10 +221,32 @@ class BefungeGrid(tk.Frame):
         else:
             self.canvas.coords(self._modified_rect, *coords)
 
+    def highlight_g_read(self, target):
+        """Move the green `g`-read outline to `target` (an (x, y) tuple), or
+        pass `None` to clear it. One-frame transient (driven by the caller
+        re-calling each refresh)."""
+        if target is None:
+            if self._read_rect is not None:
+                self.canvas.delete(self._read_rect)
+                self._read_rect = None
+            return
+        x, y = target
+        cx = x * self.cell_w
+        cy = y * self.cell_h
+        coords = (cx + 1, cy + 1, cx + self.cell_w, cy + self.cell_h)
+        if self._read_rect is None:
+            self._read_rect = self.canvas.create_rectangle(
+                *coords, fill='', outline=self.READ_OUTLINE, width=2)
+        else:
+            self.canvas.coords(self._read_rect, *coords)
+
     def reset_modifications(self):
         if self._modified_rect is not None:
             self.canvas.delete(self._modified_rect)
             self._modified_rect = None
+        if self._read_rect is not None:
+            self.canvas.delete(self._read_rect)
+            self._read_rect = None
 
     def highlight_ip(self, x, y):
         cx = x * self.cell_w
@@ -517,6 +554,10 @@ class App:
     def refresh(self, mark_changes=True):
         self.display_grid.update_from_array(self.interp.grid_array, mark_changes=mark_changes)
         self.display_grid.highlight_ip(self.interp.x, self.interp.y)
+        # Show green outline at the most recent `g` read (transient — clears
+        # on the next refresh unless another `g` fires). For silent syncs
+        # (reset), clear it.
+        self.display_grid.highlight_g_read(self.interp.g_target if mark_changes else None)
 
         arrow = {(1,0): ">", (-1,0): "<", (0,1): "v", (0,-1): "^"}.get(
             (self.interp.dx, self.interp.dy), "?")
