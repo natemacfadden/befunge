@@ -1,3 +1,12 @@
+# =============================================================================
+#    Copyright (C) 2026  Nate MacFadden
+# =============================================================================
+#
+# -----------------------------------------------------------------------------
+# Description:  Run programs through the interpreter and save outputs to
+#               dataset.parquet
+# -----------------------------------------------------------------------------
+
 import argparse, io, os, sys, time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor

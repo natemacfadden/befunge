@@ -1,13 +1,13 @@
-"""Load a dataset .parquet into a pandas DataFrame with derived columns.
+# =============================================================================
+#    Copyright (C) 2026  Nate MacFadden
+# =============================================================================
+#
+# -----------------------------------------------------------------------------
+# Description:  Load a parquet dataset into a pandas DataFrame. Supports
+#               random_programs datasets (adds derived columns for output
+#               length and UNK stats) and OEIS sequences
+# -----------------------------------------------------------------------------
 
-Usage:
-    from load import load
-    df = load('dataset_clean.parquet')
-    df.sort_values('output_len', ascending=False).head(20)
-
-Or run directly to drop into Python with `df` preloaded:
-    python -i load.py dataset_clean.parquet
-"""
 import os, re, sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,7 +32,16 @@ def unsanitize(s):
             out.append(s[i]); i += 1
     return ''.join(out)
 
-def load(path):
+def _resolve(subdir, default_name, path):
+    """If `path` is None use the default; if it's a bare filename, look under data/<subdir>/."""
+    if path is None:
+        path = default_name
+    if os.sep not in path and '/' not in path:
+        path = os.path.join(_HERE, subdir, path)
+    return path
+
+def load_programs(path=None):
+    path = _resolve('random_programs', 'dataset.parquet', path)
     df = pd.read_parquet(path)
     df['output_raw'] = df['output'].map(unsanitize)
     df['output_len'] = df['output_raw'].str.len()
@@ -42,12 +51,5 @@ def load(path):
         df['output_len'] > 0, 0.0)
     return df
 
-if __name__ == '__main__':
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(_HERE, 'dataset.parquet')
-    df = load(path)
-    print(f'loaded {len(df)} records from {path}')
-    print(df.describe(include='all'))
-    print('\nTop 10 longest ok:')
-    print(df[df.status == 'ok']
-          .sort_values('output_len', ascending=False)
-          .head(10)[['index', 'output_len', 'unk_count', 'output']])
+def load_oeis(path=None):
+    return pd.read_parquet(_resolve('oeis', 'oeis.parquet', path))
