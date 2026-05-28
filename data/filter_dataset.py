@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(_HERE))
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from interpreter.befunge import PLAYFIELD
+from befunge import PLAYFIELD
 
 PLAYFIELD_SET = set(PLAYFIELD)
 SANITIZE_RE = re.compile(r'\\x([0-9a-fA-F]{2})')

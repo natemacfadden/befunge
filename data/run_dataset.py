@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(_HERE))
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from interpreter.befunge import PLAYFIELD, run
+from befunge import PLAYFIELD, run
 
 PLAYFIELD_SET = set(PLAYFIELD)
 

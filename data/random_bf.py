@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(_HERE))
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from interpreter.befunge import INSTRUCTIONS
+from befunge import INSTRUCTIONS
 
 # Drop interactive-input opcodes (block on stdin) and `?` (nondeterministic).
 CHARS = ''.join(c for c in INSTRUCTIONS if c not in '&~?') + ' '

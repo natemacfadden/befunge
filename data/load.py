@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(_HERE))
 
 import pandas as pd
 
-from interpreter.befunge import PLAYFIELD
+from befunge import PLAYFIELD
 
 PLAYFIELD_SET = set(PLAYFIELD)
 SANITIZE_RE = re.compile(r'\\x([0-9a-fA-F]{2})')
