@@ -251,12 +251,17 @@ def run(src, max_steps=None, out=None, jit=False):
 
 if __name__ == '__main__':
     import argparse
-    p = argparse.ArgumentParser()
-    p.add_argument('file')
+    p = argparse.ArgumentParser(
+        description='Run a Befunge program, or launch the GUI when no file is given.')
+    p.add_argument('file', nargs='?', help='.bf source file (omit to open the GUI)')
     p.add_argument('--max-steps', type=int, default=None)
     p.add_argument('--jit', action='store_true')
     args = p.parse_args()
-    with open(args.file) as f:
-        status = run(f.read(), max_steps=args.max_steps, jit=args.jit)
-    if status == 'step_limit':
-        sys.stderr.write(f'\n[step limit {args.max_steps} reached]\n')
+    if args.file is None:
+        from gui import App
+        App().run()
+    else:
+        with open(args.file) as f:
+            status = run(f.read(), max_steps=args.max_steps, jit=args.jit)
+        if status == 'step_limit':
+            sys.stderr.write(f'\n[step limit {args.max_steps} reached]\n')
