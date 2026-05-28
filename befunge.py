@@ -177,7 +177,7 @@ def _push(stack, sp, v, cap):
     return sp
 
 
-def _run_core(grid, max_steps, stack, out_buf, state):
+def _run_core(grid, max_steps, stack, out_buf, state, visited):
     """
     Shared dispatch loop.
 
@@ -191,6 +191,10 @@ def _run_core(grid, max_steps, stack, out_buf, state):
 
     Returns status (0=halted, 1=step budget exhausted, 2=runtime error such
     as `p` with fewer than three values on the stack).
+
+    `visited` is an (H, W) uint8 array; cells the IP lands on or that are
+    read via `g` get set to 1. Pass a fresh array per call if you want a
+    real trace, or a throwaway array if you just want to run the program.
 
     `&` and `~` (interactive input) are treated as `push(0)` since the core
     can't block on stdin — random programs don't generate these anyway.
@@ -211,6 +215,7 @@ def _run_core(grid, max_steps, stack, out_buf, state):
     while steps < max_steps and not halted and not errored:
         steps += 1
         c = grid[y, x]
+        visited[y, x] = 1
 
         if string_mode:
             if c == DQ: string_mode = False
@@ -288,7 +293,10 @@ def _run_core(grid, max_steps, stack, out_buf, state):
             # Trade-off: very minor, only matters for programs that probe
             # off-grid cells expecting 0.
             gy, sp = _pop(stack, sp); gx, sp = _pop(stack, sp)
-            sp = _push(stack, sp, grid[gy % H, gx % W], stack_cap)
+            gy_w = gy % H
+            gx_w = gx % W
+            visited[gy_w, gx_w] = 1
+            sp = _push(stack, sp, grid[gy_w, gx_w], stack_cap)
         elif c == P_PUT:
             # The Befunge-93 spec leaves several edge cases of `p` undefined.
             # We make them errors rather than picking a silent fallback:
@@ -339,6 +347,9 @@ _OUTBUF = np.zeros(OUTPUT_CAP, dtype=np.int32)
 # Entry points
 # =============================================================================
 
+_VISITED_DUMMY = np.zeros((H, W), dtype=np.uint8)
+
+
 def run(src, max_steps=None, out=None, jit=False):
     """Run a Befunge program. Set `jit=True` for the numba-compiled hot path."""
     if out is None:
@@ -348,13 +359,42 @@ def run(src, max_steps=None, out=None, jit=False):
     grid = str_to_grid(src)
     state = new_state()
     # _STACK/_OUTBUF are module-level reusable buffers; we only read up to
-    # state[S_OUT_LEN], so stale data past it is harmless.
+    # state[S_OUT_LEN], so stale data past it is harmless. _VISITED_DUMMY
+    # is the throwaway visited buffer for callers that don't care.
     core = _run_core_jit if jit else _run_core
-    status = core(grid, max_steps, _STACK, _OUTBUF, state)
+    status = core(grid, max_steps, _STACK, _OUTBUF, state, _VISITED_DUMMY)
     n = int(state[S_OUT_LEN])
     if n > 0:
         out.write(''.join(chr(int(b)) for b in _OUTBUF[:n]))
     return {0: 'ok', 1: 'step_limit', 2: 'error'}.get(int(status), 'error')
+
+
+def run_traced(src, max_steps=None, jit=False):
+    """Like run() but also returns the (H, W) uint8 mask of cells that the
+    IP visited or `g` read. Returns (status, output_str, visited)."""
+    if max_steps is None:
+        max_steps = 1 << 62
+    grid = str_to_grid(src)
+    state = new_state()
+    visited = np.zeros((H, W), dtype=np.uint8)
+    core = _run_core_jit if jit else _run_core
+    status = core(grid, max_steps, _STACK, _OUTBUF, state, visited)
+    n = int(state[S_OUT_LEN])
+    output = ''.join(chr(int(b)) for b in _OUTBUF[:n])
+    status_str = {0: 'ok', 1: 'step_limit', 2: 'error'}.get(int(status), 'error')
+    return status_str, output, visited
+
+
+def prune_program(src, visited):
+    """Return `src` with every cell that wasn't visited replaced by a space."""
+    grid = str_to_grid(src)
+    rows = []
+    for y in range(H):
+        row = []
+        for x in range(W):
+            row.append(chr(int(grid[y, x])) if visited[y, x] else ' ')
+        rows.append(''.join(row).rstrip())
+    return '\n'.join(rows).rstrip('\n')
 
 # gui
 if __name__ == '__main__':

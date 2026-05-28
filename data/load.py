@@ -51,5 +51,24 @@ def load_programs(path=None):
         df['output_len'] > 0, 0.0)
     return df
 
-def load_oeis(path=None):
-    return pd.read_parquet(_resolve('oeis', 'oeis.parquet', path))
+def to_clipboard(text):
+    """Copy `text` to the system clipboard. Run the GUI separately and Cmd+V
+    to paste — handy for inspecting a program from a DataFrame."""
+    import platform, subprocess
+    sysname = platform.system()
+    if sysname == 'Darwin':
+        cmd = ['pbcopy']
+    elif sysname == 'Linux':
+        cmd = ['xclip', '-selection', 'clipboard']
+    else:
+        cmd = ['clip']
+    subprocess.run(cmd, input=text, text=True, check=True)
+    print(text)
+
+
+def load_oeis(path=None, parse_ints=True):
+    df = pd.read_parquet(_resolve('oeis', 'oeis.parquet', path))
+    if parse_ints:
+        # OEIS terms can exceed int64 (factorials, etc.), so use Python ints.
+        df['sequence'] = df['sequence'].map(lambda s: tuple(int(x) for x in s))
+    return df

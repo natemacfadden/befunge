@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from befunge import (
     W, H, STACK_CAP, OUTPUT_CAP, str_to_grid, new_state, _run_core,
+    _VISITED_DUMMY,
     S_SP, S_OUT_LEN, S_X, S_Y, S_DX, S_DY, S_STRING_MODE,
 )
 
@@ -57,7 +58,7 @@ class Interpreter:
     def step(self):
         if self.halted: return
         try:
-            status = _run_core(self._grid, 1, self._stack, self._out_buf, self.state)
+            status = _run_core(self._grid, 1, self._stack, self._out_buf, self.state, _VISITED_DUMMY)
         except Exception as e:
             self.halted = True
             self.error = str(e)
@@ -358,7 +359,10 @@ class BefungeGrid(tk.Frame):
 
 
 class App:
-    def __init__(self):
+    def __init__(self, src=""):
+        """`src` (optional) is a Befunge source string to preload into the
+        editor — convenient for `App(df.iloc[i]['pruned_program']).run()`
+        from a notebook."""
         self.interp         = Interpreter()
         self.history        = []
         self.running        = False
@@ -433,7 +437,9 @@ class App:
         self.speed_label.pack(side="left", padx=4)
 
         self._update_speed_label()
-        self.refresh()
+        if src:
+            self.editor_grid.load_src(src)
+        self.reset()
 
     def load_file(self):
         path = filedialog.askopenfilename(filetypes=[("Befunge", "*.bf"), ("All files", "*.*")])
