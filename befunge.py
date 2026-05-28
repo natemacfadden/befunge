@@ -93,11 +93,13 @@ ALPHABET = {
 def str_to_grid(src):
     """
     Lay out a .bf source string onto an (H, W) int32 grid, padded with spaces.
+    Cell values are bytes (0-255): `p` masks `v % 256` on write, matching
+    standard Befunge-93 / extended-ASCII semantics.
     """
     grid = np.full((H, W), SPACE, dtype=np.int32)
     for y, line in enumerate(src.splitlines()[:H]):
         for x, ch in enumerate(line[:W]):
-            grid[y, x] = ord(ch)
+            grid[y, x] = ord(ch) & 0xff
     return grid
 
 # =============================================================================
@@ -187,7 +189,8 @@ def _run_core(grid, max_steps, stack, out_buf, state):
     Resumable: state is mutated in place so callers can drive the interpreter
     step-by-step (the GUI does exactly that).
 
-    Returns status (0=halted, 1=step budget exhausted).
+    Returns status (0=halted, 1=step budget exhausted, 2=runtime error such
+    as `p` with fewer than three values on the stack).
 
     `&` and `~` (interactive input) are treated as `push(0)` since the core
     can't block on stdin — random programs don't generate these anyway.
@@ -203,8 +206,9 @@ def _run_core(grid, max_steps, stack, out_buf, state):
     out_cap     = out_buf.shape[0]
     steps       = 0
     halted      = False
+    errored     = False
 
-    while steps < max_steps and not halted:
+    while steps < max_steps and not halted and not errored:
         steps += 1
         c = grid[y, x]
 
@@ -279,17 +283,34 @@ def _run_core(grid, max_steps, stack, out_buf, state):
             x = (x + dx) % W
             y = (y + dy) % H
         elif c == G_GET:
+            # DEVIATION from Befunge-93 spec: spec says out-of-bounds reads
+            # push 0; we wrap (mod) for symmetry with `p` and IP movement.
+            # Trade-off: very minor, only matters for programs that probe
+            # off-grid cells expecting 0.
             gy, sp = _pop(stack, sp); gx, sp = _pop(stack, sp)
             sp = _push(stack, sp, grid[gy % H, gx % W], stack_cap)
         elif c == P_PUT:
-            py, sp = _pop(stack, sp); px, sp = _pop(stack, sp); v, sp = _pop(stack, sp)
-            grid[py % H, px % W] = v % 256
+            # The Befunge-93 spec leaves several edge cases of `p` undefined.
+            # We make them errors rather than picking a silent fallback:
+            #   1. Stack underflow (< 3 items) → error, instead of popping 0s.
+            #   2. Value v outside the byte range (0..255) → error. A mod-256
+            #      wrap would silently corrupt the playground (see fib.bf
+            #      once values exceed 255).
+            # Coords out-of-bounds still wrap (mod), matching `g`.
+            if sp < 3:
+                errored = True
+            else:
+                py, sp = _pop(stack, sp); px, sp = _pop(stack, sp); v, sp = _pop(stack, sp)
+                if 0 <= v < 256:
+                    grid[py % H, px % W] = v
+                else:
+                    errored = True
         elif c == AMP or c == TILDE:
             sp = _push(stack, sp, 0, stack_cap)
         elif c == AT:
             halted = True
 
-        if not halted:
+        if not halted and not errored:
             x = (x + dx) % W
             y = (y + dy) % H
 
@@ -300,6 +321,8 @@ def _run_core(grid, max_steps, stack, out_buf, state):
     state[S_DX]          = dx
     state[S_DY]          = dy
     state[S_STRING_MODE] = 1 if string_mode else 0
+    if errored:
+        return 2
     return 0 if halted else 1
 
 # Lazily compiled JIT version of _run_core. First `run(..., jit=True)` call
@@ -331,7 +354,7 @@ def run(src, max_steps=None, out=None, jit=False):
     n = int(state[S_OUT_LEN])
     if n > 0:
         out.write(''.join(chr(int(b)) for b in _OUTBUF[:n]))
-    return 'ok' if status == 0 else 'step_limit'
+    return {0: 'ok', 1: 'step_limit', 2: 'error'}.get(int(status), 'error')
 
 # gui
 if __name__ == '__main__':

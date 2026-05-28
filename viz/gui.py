@@ -33,6 +33,7 @@ class Interpreter:
         self._out_buf = np.zeros(OUTPUT_CAP, dtype=np.int32)
         self.state    = new_state()
         self.halted   = False
+        self.error    = None
 
     def snapshot(self):
         sp = int(self.state[S_SP])
@@ -41,21 +42,31 @@ class Interpreter:
                 self._stack[:sp].copy(),
                 self._out_buf[:n].copy(),
                 self.state.copy(),
-                self.halted)
+                self.halted,
+                self.error)
 
     def restore(self, snap):
-        g, s, ob, st, h = snap
+        g, s, ob, st, h, e = snap
         self._grid[:] = g
         self.state[:] = st
         self._stack[:len(s)] = s
         self._out_buf[:len(ob)] = ob
         self.halted = h
+        self.error = e
 
     def step(self):
         if self.halted: return
-        status = _run_core(self._grid, 1, self._stack, self._out_buf, self.state)
+        try:
+            status = _run_core(self._grid, 1, self._stack, self._out_buf, self.state)
+        except Exception as e:
+            self.halted = True
+            self.error = str(e)
+            return
         if status == 0:
             self.halted = True
+        elif status == 2:
+            self.halted = True
+            self.error = "p: stack underflow or value out of byte range"
 
     @property
     def grid_array(self):
@@ -90,10 +101,11 @@ class BefungeGrid(tk.Frame):
     BG             = 'white'
     IP_COLOR       = '#ffe066'
     CURSOR_OUTLINE = '#3399ff'
+    MOD_OUTLINE    = '#dd4444'  # cells touched by `p` get this border
 
     def __init__(self, parent, cols=W, rows=H, cell_w=9, cell_h=14,
                  font=None, editable=False, on_change=None):
-        super().__init__(parent)
+        super().__init__(parent, bd=0, padx=0, pady=0)
         self.cols      = cols
         self.rows      = rows
         self.cell_w    = cell_w
@@ -105,7 +117,7 @@ class BefungeGrid(tk.Frame):
         cw = cols * cell_w + 1
         ch = rows * cell_h + 1
         self.canvas = tk.Canvas(self, width=cw, height=ch, bg=self.BG,
-                                highlightthickness=0, takefocus=editable)
+                                bd=0, highlightthickness=0, takefocus=editable)
         self.canvas.pack()
 
         # Grid lines (offset by 0.5 for crisp 1px lines on retina/non-retina).
@@ -120,15 +132,21 @@ class BefungeGrid(tk.Frame):
 
         # Per-cell state. _chars holds what's logically there; _text_ids holds
         # canvas item ids for any cell that's currently drawn.
-        self._chars       = [[' '] * cols for _ in range(rows)]
-        self._text_ids    = {}
-        self._ip_rect     = None
-        self._cursor_rect = None
-        self._cursor      = (0, 0)
+        self._chars         = [[' '] * cols for _ in range(rows)]
+        self._text_ids      = {}
+        self._ip_rect       = None
+        self._cursor_rect   = None
+        self._cursor        = (0, 0)
+        self._modified_rect = None  # single moving outline for the latest `p`
 
         if editable:
             self.canvas.bind('<Button-1>', self._on_click)
             self.canvas.bind('<Key>', self._on_key)
+            # Tk's <<Paste>> maps to the platform shortcut. Explicit bindings
+            # are belt-and-suspenders in case the virtual event doesn't fire.
+            self.canvas.bind('<<Paste>>',   self._on_paste)
+            self.canvas.bind('<Command-v>', self._on_paste)
+            self.canvas.bind('<Control-v>', self._on_paste)
             self._draw_cursor()
 
     # ---- public API --------------------------------------------------------
@@ -147,17 +165,50 @@ class BefungeGrid(tk.Frame):
     def dump_src(self):
         return '\n'.join(''.join(row) for row in self._chars)
 
-    def update_from_array(self, arr):
-        """Diff-update from a (H, W) int array. Only cells that changed are
-        redrawn — full sweep is ~2000 comparisons (cheap)."""
+    def update_from_array(self, arr, mark_changes=True):
+        """Sync the canvas to the (H, W) int array. We sweep all 2000 cells
+        every call — equality comparisons are nearly free — but only the
+        cells whose content actually changed pay the expensive tkinter
+        canvas-draw cost. Cells holding values outside chr()'s range render
+        as a placeholder so we don't crash on display.
+
+        When `mark_changes` is True (the default during stepping), the red
+        outline is cleared and then re-added at any cell whose content
+        changed this call. Effect: the outline shows for exactly one
+        refresh after a `p`, then disappears on the next one if no further
+        write happened. Pass `mark_changes=False` for a silent sync (e.g.,
+        after `reset`) — the outline is left alone."""
+        if mark_changes and self._modified_rect is not None:
+            self.canvas.delete(self._modified_rect)
+            self._modified_rect = None
         for y in range(self.rows):
             row = self._chars[y]
             arr_row = arr[y]
             for x in range(self.cols):
-                ch = chr(int(arr_row[x]))
+                v = int(arr_row[x])
+                ch = chr(v) if 0 <= v < 0x110000 else '?'
                 if row[x] != ch:
                     row[x] = ch
                     self._draw_cell(x, y)
+                    if mark_changes:
+                        self._mark_modified(x, y)
+
+    def _mark_modified(self, x, y):
+        # Single outline that follows the most recent write — moves rather
+        # than accumulating, so the user always sees where `p` just landed.
+        cx = x * self.cell_w
+        cy = y * self.cell_h
+        coords = (cx + 1, cy + 1, cx + self.cell_w, cy + self.cell_h)
+        if self._modified_rect is None:
+            self._modified_rect = self.canvas.create_rectangle(
+                *coords, fill='', outline=self.MOD_OUTLINE, width=2)
+        else:
+            self.canvas.coords(self._modified_rect, *coords)
+
+    def reset_modifications(self):
+        if self._modified_rect is not None:
+            self.canvas.delete(self._modified_rect)
+            self._modified_rect = None
 
     def highlight_ip(self, x, y):
         cx = x * self.cell_w
@@ -177,18 +228,39 @@ class BefungeGrid(tk.Frame):
 
     # ---- internal drawing --------------------------------------------------
 
+    NONPRINT_COLOR = '#888888'  # bytes with a standard control-picture glyph
+    NOGLYPH_COLOR  = '#dd4444'  # bytes with no standard glyph — call them out
+
     def _draw_cell(self, x, y):
         key = (x, y)
         if key in self._text_ids:
             self.canvas.delete(self._text_ids.pop(key))
         ch = self._chars[y][x]
-        # Non-printable bytes get rendered as blank to avoid any layout
-        # surprise; the data is still in self._chars.
-        if 32 <= ord(ch) < 127 and ch != ' ':
-            cx = x * self.cell_w + self.cell_w / 2
-            cy = y * self.cell_h + self.cell_h / 2
-            self._text_ids[key] = self.canvas.create_text(
-                cx, cy, text=ch, font=self.font, fill='black')
+        o = ord(ch)
+
+        # Pick a glyph and color for this cell. Space stays invisible; other
+        # non-printable bytes get a placeholder. Bytes with no standard glyph
+        # at all (the C1 control area, 128–159) are flagged in red.
+        #   - 0–31 : Unicode "control pictures" (␀ ␁ ␂ … ␟) — gray
+        #   - 127  : '␡' (DEL picture) — gray
+        #   - 128–159 : '·' (middle dot) — RED (no standard glyph)
+        if o == 32:
+            return                         # plain space, nothing to draw
+        if 33 <= o < 127 or 160 <= o < 256:
+            glyph, color = ch, 'black'     # printable ASCII / extended ASCII
+        elif 0 <= o < 32:
+            glyph, color = chr(0x2400 + o), self.NONPRINT_COLOR
+        elif o == 127:
+            glyph, color = '␡', self.NONPRINT_COLOR
+        elif 128 <= o < 160:
+            glyph, color = '·', self.NOGLYPH_COLOR
+        else:
+            glyph, color = '?', self.NOGLYPH_COLOR
+
+        cx = x * self.cell_w + self.cell_w / 2
+        cy = y * self.cell_h + self.cell_h / 2
+        self._text_ids[key] = self.canvas.create_text(
+            cx, cy, text=glyph, font=self.font, fill=color)
 
     def _redraw_all(self):
         for tid in self._text_ids.values():
@@ -253,6 +325,37 @@ class BefungeGrid(tk.Frame):
         self._cursor = (x, y)
         self._draw_cursor()
 
+    def _on_paste(self, event=None):
+        try:
+            text = self.canvas.clipboard_get()
+        except tk.TclError:
+            return 'break'
+        start_x, start_y = self._cursor
+        x, y = start_x, start_y
+        changed = False
+        for ch in text:
+            if ch == '\r':
+                continue
+            if ch == '\n':
+                y += 1
+                x = start_x
+                continue
+            if y >= self.rows:
+                break
+            if x >= self.cols:
+                continue  # don't auto-wrap; let the line truncate
+            if 32 <= ord(ch) < 127:
+                self._chars[y][x] = ch
+                self._draw_cell(x, y)
+                changed = True
+                x += 1
+        if changed:
+            self._cursor = (min(x, self.cols - 1), min(y, self.rows - 1))
+            self._draw_cursor()
+            if self.on_change:
+                self.on_change()
+        return 'break'
+
 
 class App:
     def __init__(self):
@@ -273,44 +376,59 @@ class App:
         right = tk.Frame(self.root)
         right.grid(row=0, column=1, padx=8, pady=8, sticky="n")
 
-        # LEFT: editor
-        top = tk.Frame(left)
+        # Fixed-height header rows on both sides so the grids below them start
+        # at the same Y. Tall enough to accommodate a tk.Button on macOS.
+        HEADER_H = 32
+
+        # LEFT: editor header
+        top = tk.Frame(left, height=HEADER_H)
         top.pack(fill="x", anchor="w")
+        top.pack_propagate(False)
         tk.Label(top, text="Editor", font=("Sans", 11, "bold")).pack(side="left")
         tk.Button(top, text="Load...", command=self.load_file).pack(side="right")
+        tk.Button(top, text="Clear",   command=self.clear).pack(side="right", padx=(0, 4))
         self.editor_grid = BefungeGrid(left, W, H, font=mono, editable=True,
                                        on_change=self.reset)
         self.editor_grid.pack(anchor="w")
 
-        # RIGHT: display + status + stack + output + controls
-        tk.Label(right, text="Execution", font=("Sans", 11, "bold")).pack(anchor="w")
+        # RIGHT: execution header (status moves up here so it shares the row
+        # with the Execution label, matching the editor's label+buttons row).
+        exec_top = tk.Frame(right, height=HEADER_H)
+        exec_top.pack(fill="x", anchor="w")
+        exec_top.pack_propagate(False)
+        tk.Label(exec_top, text="Execution", font=("Sans", 11, "bold")).pack(side="left")
+        self.status = tk.Label(exec_top, text="", font=("Sans", 10), anchor="w")
+        self.status.pack(side="left", padx=(8, 0))
+
         self.display_grid = BefungeGrid(right, W, H, font=mono)
         self.display_grid.pack(anchor="w")
-
-        self.status = tk.Label(right, text="", font=("Sans", 10), anchor="w")
-        self.status.pack(fill="x", pady=(2, 4))
 
         tk.Label(right, text="Stack (bottom -> top)", font=("Sans", 10, "bold"),
                  anchor="w").pack(fill="x")
         self.stack_view = tk.Text(right, width=W, height=3, font=mono,
                                   wrap="word", state="disabled")
-        self.stack_view.pack(anchor="w")
+        self.stack_view.pack(fill="x")
 
         tk.Label(right, text="Output", font=("Sans", 10, "bold"),
                  anchor="w").pack(fill="x", pady=(4, 0))
-        self.output_view = tk.Text(right, width=W, height=4, font=mono,
-                                   wrap="word", state="disabled")
-        self.output_view.pack(anchor="w")
+        out_frame = tk.Frame(right)
+        out_frame.pack(fill="x")
+        self.output_view = tk.Text(out_frame, width=W, height=8, font=mono,
+                                   wrap="char", state="disabled")
+        self.output_view.pack(side="left", fill="both", expand=True)
+        out_scroll = tk.Scrollbar(out_frame, command=self.output_view.yview)
+        out_scroll.pack(side="right", fill="y")
+        self.output_view.config(yscrollcommand=out_scroll.set)
 
-        ctrl = tk.Frame(right)
+        ctrl = tk.Frame(left)
         ctrl.pack(pady=6, anchor="w")
-        tk.Button(ctrl, text="Reset", command=self.reset).pack(side="left", padx=2)
-        tk.Button(ctrl, text="Step Back", command=self.step_back).pack(side="left", padx=2)
-        tk.Button(ctrl, text="Step Fwd", command=self.step).pack(side="left", padx=2)
-        tk.Button(ctrl, text="Go", command=self.go).pack(side="left", padx=2)
-        tk.Button(ctrl, text="Stop", command=self.stop).pack(side="left", padx=2)
-        tk.Button(ctrl, text="Slower", command=self.slower).pack(side="left", padx=(12, 2))
-        tk.Button(ctrl, text="Faster", command=self.faster).pack(side="left", padx=2)
+        tk.Button(ctrl, text="Reset",     command=self.reset).pack(side="left", padx=2)
+        tk.Button(ctrl, text="Go",        command=self.go).pack(side="left", padx=2)
+        tk.Button(ctrl, text="Stop",      command=self.stop).pack(side="left", padx=2)
+        tk.Button(ctrl, text="Slower",    command=self.slower).pack(side="left", padx=(12, 2))
+        tk.Button(ctrl, text="Faster",    command=self.faster).pack(side="left", padx=2)
+        tk.Button(ctrl, text="Step Back", command=self.step_back).pack(side="left", padx=(12, 2))
+        tk.Button(ctrl, text="Step Fwd",  command=self.step).pack(side="left", padx=2)
         self.speed_label = tk.Label(ctrl, text="", font=("Sans", 10), width=16)
         self.speed_label.pack(side="left", padx=4)
 
@@ -325,12 +443,17 @@ class App:
         self.editor_grid.load_src(src)
         self.reset()
 
+    def clear(self):
+        self.editor_grid.load_src("")
+        self.reset()
+
     def reset(self):
         self.running = False
         src = self.editor_grid.dump_src()
         self.interp.load(src)
         self.history.clear()
-        self.refresh()
+        self.display_grid.reset_modifications()
+        self.refresh(mark_changes=False)
 
     def step(self):
         if self.interp.halted: return
@@ -385,16 +508,21 @@ class App:
         if not self.interp.halted:
             self.root.after(self.delay, self._tick)
 
-    def refresh(self):
-        self.display_grid.update_from_array(self.interp.grid_array)
+    def refresh(self, mark_changes=True):
+        self.display_grid.update_from_array(self.interp.grid_array, mark_changes=mark_changes)
         self.display_grid.highlight_ip(self.interp.x, self.interp.y)
 
         arrow = {(1,0): ">", (-1,0): "<", (0,1): "v", (0,-1): "^"}.get(
             (self.interp.dx, self.interp.dy), "?")
         mode = "STRING" if self.interp.string_mode else "normal"
-        halted = " [HALTED]" if self.interp.halted else ""
+        if self.interp.error:
+            tail = f" [ERROR: {self.interp.error}]"
+        elif self.interp.halted:
+            tail = " [HALTED]"
+        else:
+            tail = ""
         self.status.config(
-            text=f"IP: ({self.interp.x}, {self.interp.y}) {arrow}   mode: {mode}{halted}")
+            text=f"IP: ({self.interp.x}, {self.interp.y}) {arrow}   mode: {mode}{tail}")
 
         self.stack_view.configure(state="normal")
         self.stack_view.delete("1.0", "end")
@@ -404,6 +532,7 @@ class App:
         self.output_view.configure(state="normal")
         self.output_view.delete("1.0", "end")
         self.output_view.insert("1.0", self.interp.output)
+        self.output_view.see("end")
         self.output_view.configure(state="disabled")
 
     def run(self):
