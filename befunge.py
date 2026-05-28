@@ -370,8 +370,10 @@ def run(src, max_steps=None, out=None, jit=False):
 
 
 def run_traced(src, max_steps=None, jit=False):
-    """Like run() but also returns the (H, W) uint8 mask of cells that the
-    IP visited or `g` read. Returns (status, output_str, visited)."""
+    """Like run() but also returns:
+      - visited: (H, W) uint8 mask of cells the IP touched or `g` read.
+      - final_stack: list of Python ints left on the stack at termination.
+    Returns (status, output_str, visited, final_stack)."""
     if max_steps is None:
         max_steps = 1 << 62
     grid = str_to_grid(src)
@@ -380,13 +382,21 @@ def run_traced(src, max_steps=None, jit=False):
     core = _run_core_jit if jit else _run_core
     status = core(grid, max_steps, _STACK, _OUTBUF, state, visited)
     n = int(state[S_OUT_LEN])
+    sp = int(state[S_SP])
     output = ''.join(chr(int(b)) for b in _OUTBUF[:n])
+    final_stack = [int(v) for v in _STACK[:sp]]  # snapshot the live portion
     status_str = {0: 'ok', 1: 'step_limit', 2: 'error'}.get(int(status), 'error')
-    return status_str, output, visited
+    return status_str, output, visited, final_stack
 
 
 def prune_program(src, visited):
-    """Return `src` with every cell that wasn't visited replaced by a space."""
+    """Return `src` with every initial-grid cell that wasn't read replaced
+    by a space. Only the source characters survive; runtime mutations via
+    `p` don't show up here.
+
+    Caveat: only semantically equivalent to the original run if the program
+    halted naturally (`@`). For `step_limit` / `error`, `visited` reflects
+    only what the truncated run touched."""
     grid = str_to_grid(src)
     rows = []
     for y in range(H):
