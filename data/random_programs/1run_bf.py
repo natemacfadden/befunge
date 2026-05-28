@@ -3,7 +3,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(_HERE))
+sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))  # project root
 
 import pyarrow as pa
 import pyarrow.parquet as pq
