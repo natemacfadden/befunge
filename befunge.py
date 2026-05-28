@@ -158,6 +158,23 @@ V_DOWN   = ALPHABET['v']
 PIPE     = ALPHABET['|']
 TILDE    = ALPHABET['~']
 
+@njit(cache=True, inline='always')
+def _pop(stack, sp):
+    """Pop one value; returns (value, new_sp). Underflow yields (0, 0)."""
+    if sp > 0:
+        return stack[sp - 1], sp - 1
+    return 0, 0
+
+
+@njit(cache=True, inline='always')
+def _push(stack, sp, v, cap):
+    """Push one value if there's room; returns new sp."""
+    if sp < cap:
+        stack[sp] = v
+        return sp + 1
+    return sp
+
+
 def _run_core(grid, max_steps, stack, out_buf, state):
     """
     Shared dispatch loop.
@@ -192,159 +209,83 @@ def _run_core(grid, max_steps, stack, out_buf, state):
         c = grid[y, x]
 
         if string_mode:
-            if c == DQ:
-                string_mode = False
-            elif sp < stack_cap:
-                stack[sp] = c; sp += 1
+            if c == DQ: string_mode = False
+            else: sp = _push(stack, sp, c, stack_cap)
         elif c == SPACE:
             pass
         elif ZERO <= c <= NINE:
-            if sp < stack_cap:
-                stack[sp] = c - ZERO; sp += 1
+            sp = _push(stack, sp, c - ZERO, stack_cap)
         elif c == PLUS:
-            sp -= 1
-            a = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            b = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            stack[sp] = a + b; sp += 1
+            a, sp = _pop(stack, sp); b, sp = _pop(stack, sp)
+            sp = _push(stack, sp, a + b, stack_cap)
         elif c == STAR:
-            sp -= 1
-            a = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            b = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            stack[sp] = a * b; sp += 1
+            a, sp = _pop(stack, sp); b, sp = _pop(stack, sp)
+            sp = _push(stack, sp, a * b, stack_cap)
         elif c == MINUS:
-            sp -= 1
-            a = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            b = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            stack[sp] = b - a; sp += 1
+            a, sp = _pop(stack, sp); b, sp = _pop(stack, sp)
+            sp = _push(stack, sp, b - a, stack_cap)
         elif c == SLASH:
-            sp -= 1
-            a = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            b = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            stack[sp] = (b // a) if a != 0 else 0; sp += 1
+            a, sp = _pop(stack, sp); b, sp = _pop(stack, sp)
+            sp = _push(stack, sp, (b // a) if a != 0 else 0, stack_cap)
         elif c == PCT:
-            sp -= 1
-            a = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            b = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            stack[sp] = (b % a) if a != 0 else 0; sp += 1
-        elif c == GT:
-            dx = 1; dy = 0
-        elif c == LT:
-            dx = -1; dy = 0
-        elif c == CARET:
-            dx = 0; dy = -1
-        elif c == V_DOWN:
-            dx = 0; dy = 1
+            a, sp = _pop(stack, sp); b, sp = _pop(stack, sp)
+            sp = _push(stack, sp, (b % a) if a != 0 else 0, stack_cap)
+        elif c == GT:     dx, dy =  1,  0
+        elif c == LT:     dx, dy = -1,  0
+        elif c == CARET:  dx, dy =  0, -1
+        elif c == V_DOWN: dx, dy =  0,  1
         elif c == QMARK:
             r = np.random.randint(0, 4)
-            if r == 0:   dx = 1;  dy = 0
-            elif r == 1: dx = -1; dy = 0
-            elif r == 2: dx = 0;  dy = 1
-            else:        dx = 0;  dy = -1
+            if   r == 0: dx, dy =  1,  0
+            elif r == 1: dx, dy = -1,  0
+            elif r == 2: dx, dy =  0,  1
+            else:        dx, dy =  0, -1
         elif c == UNDER:
-            sp -= 1
-            v = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            if v == 0: dx = 1;  dy = 0
-            else:      dx = -1; dy = 0
+            v, sp = _pop(stack, sp)
+            dx, dy = (1, 0) if v == 0 else (-1, 0)
         elif c == PIPE:
-            sp -= 1
-            v = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            if v == 0: dx = 0; dy = 1
-            else:      dx = 0; dy = -1
+            v, sp = _pop(stack, sp)
+            dx, dy = (0, 1) if v == 0 else (0, -1)
         elif c == BANG:
-            sp -= 1
-            v = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            stack[sp] = 0 if v != 0 else 1; sp += 1
+            v, sp = _pop(stack, sp)
+            sp = _push(stack, sp, 0 if v != 0 else 1, stack_cap)
         elif c == BACKTICK:
-            sp -= 1
-            a = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            b = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            stack[sp] = 1 if b > a else 0; sp += 1
+            a, sp = _pop(stack, sp); b, sp = _pop(stack, sp)
+            sp = _push(stack, sp, 1 if b > a else 0, stack_cap)
         elif c == DQ:
             string_mode = True
         elif c == COLON:
-            sp -= 1
-            v = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            if sp < stack_cap:
-                stack[sp] = v; sp += 1
-            if sp < stack_cap:
-                stack[sp] = v; sp += 1
+            v, sp = _pop(stack, sp)
+            sp = _push(stack, sp, v, stack_cap)
+            sp = _push(stack, sp, v, stack_cap)
         elif c == BSLASH:
-            sp -= 1
-            a = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            b = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            if sp < stack_cap:
-                stack[sp] = a; sp += 1
-            if sp < stack_cap:
-                stack[sp] = b; sp += 1
+            a, sp = _pop(stack, sp); b, sp = _pop(stack, sp)
+            sp = _push(stack, sp, a, stack_cap)
+            sp = _push(stack, sp, b, stack_cap)
         elif c == DOLLAR:
-            if sp > 0: sp -= 1
+            _, sp = _pop(stack, sp)
         elif c == DOT:
-            sp -= 1
-            v = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            s = str(v)
-            for ch in s:
+            v, sp = _pop(stack, sp)
+            for ch in str(v):
                 if out_len < out_cap:
                     out_buf[out_len] = ord(ch); out_len += 1
             if out_len < out_cap:
                 out_buf[out_len] = SPACE; out_len += 1
         elif c == COMMA:
-            sp -= 1
-            v = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
+            v, sp = _pop(stack, sp)
             if out_len < out_cap:
                 out_buf[out_len] = v % 256; out_len += 1
         elif c == HASH:
             x = (x + dx) % W
             y = (y + dy) % H
         elif c == G_GET:
-            sp -= 1
-            gy = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            gx = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            if sp < stack_cap:
-                stack[sp] = grid[gy % H, gx % W]; sp += 1
+            gy, sp = _pop(stack, sp); gx, sp = _pop(stack, sp)
+            sp = _push(stack, sp, grid[gy % H, gx % W], stack_cap)
         elif c == P_PUT:
-            sp -= 1
-            py = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            px = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
-            sp -= 1
-            v = stack[sp] if sp >= 0 else 0
-            if sp < 0: sp = 0
+            py, sp = _pop(stack, sp); px, sp = _pop(stack, sp); v, sp = _pop(stack, sp)
             grid[py % H, px % W] = v % 256
         elif c == AMP or c == TILDE:
-            if sp < stack_cap:
-                stack[sp] = 0; sp += 1
+            sp = _push(stack, sp, 0, stack_cap)
         elif c == AT:
             halted = True
 
