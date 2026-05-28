@@ -2,3 +2,6 @@
 *.parquet
 
 random/
+
+.ipynb_checkpoints/
+__pycache__/
