@@ -1,6 +1,15 @@
-import argparse, os, random
+import argparse, os, random, sys
 
-CHARS = '0123456789+*-/%!`><^v?_|:\\$.,#gp@" '
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from befunge import INSTRUCTIONS
+
+# Drop interactive-input opcodes (block on stdin) and `?` (nondeterministic).
+CHARS = ''.join(c for c in INSTRUCTIONS if c not in '&~?') + ' '
 
 def generate(rng, w=80, h=25, density=0.7):
     grid = [[' '] * w for _ in range(h)]
@@ -15,13 +24,27 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('count', type=int, nargs='?', default=10)
     p.add_argument('--seed', type=int, default=0)
-    p.add_argument('--dir', default='random')
+    p.add_argument('--out', default=os.path.join(_HERE, 'programs.parquet'))
+    p.add_argument('--batch-size', type=int, default=50000)
     args = p.parse_args()
 
-    os.makedirs(args.dir, exist_ok=True)
+    writer = None
+    batch = []
     for i in range(args.count):
         rng = random.Random(f'{args.seed}-{i}')
-        path = os.path.join(args.dir, f'random_{i}.bf')
-        with open(path, 'w') as f:
-            f.write(generate(rng) + '\n')
-        print(f'wrote {path}')
+        batch.append({'index': i, 'seed': args.seed, 'program': generate(rng)})
+        if len(batch) >= args.batch_size:
+            table = pa.Table.from_pylist(batch)
+            if writer is None:
+                writer = pq.ParquetWriter(args.out, table.schema, compression='zstd')
+            writer.write_table(table)
+            print(f'  [{i+1}/{args.count}]')
+            batch = []
+    if batch:
+        table = pa.Table.from_pylist(batch)
+        if writer is None:
+            writer = pq.ParquetWriter(args.out, table.schema, compression='zstd')
+        writer.write_table(table)
+    if writer:
+        writer.close()
+    print(f'wrote {args.count} programs to {args.out}')
