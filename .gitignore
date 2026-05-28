@@ -1,5 +1,6 @@
 *.jsonl
 *.parquet
+*.png
 
 random/
 
