@@ -11,6 +11,9 @@ import sys
 import numpy as np
 from numba import njit
 
+# misc config - editable
+STACK_CAP  = 65536 # max stack depth; pushes past this are silently dropped
+OUTPUT_CAP = 8192  # max output bytes per _run_core call; rest is truncated
 
 # =============================================================================
 # Language
@@ -30,7 +33,7 @@ from numba import njit
 #   - SP is the stack pointer — index where the next push will land; the top
 #     of the stack is stack[SP-1].
 #
-W, H = 80, 25  # playfield dimensions (columns, rows)
+W, H = 80, 25 # playfield dimensions (columns, rows)
 
 # INSTRUCTIONS below maps each instruction character to its ord value, with
 # a brief description per op. ALPHABET adds the two chars that can appear
@@ -83,9 +86,48 @@ ALPHABET = {
     '\n': ord('\n'),  # row separator in .bf source files
 }
 
-# Aliases for _run_core's dispatch. Reading from the enclosing scope at compile
-# time lets numba fold each comparison to a literal int compare. Names mirror
-# the char they encode.
+# =============================================================================
+# Source parsing
+# =============================================================================
+
+def str_to_grid(src):
+    """
+    Lay out a .bf source string onto an (H, W) int32 grid, padded with spaces.
+    """
+    grid = np.full((H, W), SPACE, dtype=np.int32)
+    for y, line in enumerate(src.splitlines()[:H]):
+        for x, ch in enumerate(line[:W]):
+            grid[y, x] = ord(ch)
+    return grid
+
+# =============================================================================
+# Runtime state
+# =============================================================================
+# The interpreter's pausable runtime state lives in a small int64 array,
+# mutated in place by _run_core so the GUI can pause between steps and so
+# numba can compile the dispatch loop. Indexes into that array:
+S_SP          = 0  # stack pointer
+S_OUT_LEN     = 1  # bytes written to the output buffer
+S_X           = 2  # IP column
+S_Y           = 3  # IP row
+S_DX          = 4  # IP horizontal direction (-1, 0, +1)
+S_DY          = 5  # IP vertical direction   (-1, 0, +1)
+S_STRING_MODE = 6  # 0 or 1
+STATE_SIZE    = 7
+
+def new_state():
+    """Initial interpreter state: IP at (0,0) heading right."""
+    s = np.zeros(STATE_SIZE, dtype=np.int64)
+    s[S_DX] = 1
+    return s
+
+# =============================================================================
+# Interpreter
+# =============================================================================
+
+# aliases of ALPHABET for _run_core's dispatch. Reading from the enclosing scope
+# at compile time lets numba fold each comparison to a literal int compare.
+# Names mirror the char they encode.
 SPACE    = ALPHABET[' ']
 BANG     = ALPHABET['!']
 DQ       = ALPHABET['"']
@@ -116,56 +158,23 @@ V_DOWN   = ALPHABET['v']
 PIPE     = ALPHABET['|']
 TILDE    = ALPHABET['~']
 
-
-# =============================================================================
-# Source parsing
-# =============================================================================
-
-def str_to_grid(src):
-    """Lay out a .bf source string onto an (H, W) int32 grid, padded with spaces."""
-    grid = np.full((H, W), SPACE, dtype=np.int32)
-    for y, line in enumerate(src.splitlines()[:H]):
-        for x, ch in enumerate(line[:W]):
-            grid[y, x] = ord(ch)
-    return grid
-
-
-# =============================================================================
-# Runtime state
-# =============================================================================
-# The interpreter's pausable runtime state lives in a small int64 array,
-# mutated in place by _run_core so the GUI can pause between steps and so
-# numba can compile the dispatch loop. Indexes into that array:
-S_SP          = 0  # stack pointer
-S_OUT_LEN     = 1  # bytes written to the output buffer
-S_X           = 2  # IP column
-S_Y           = 3  # IP row
-S_DX          = 4  # IP horizontal direction (-1, 0, +1)
-S_DY          = 5  # IP vertical direction   (-1, 0, +1)
-S_STRING_MODE = 6  # 0 or 1
-STATE_SIZE    = 7
-
-
-def new_state():
-    """Initial interpreter state: IP at (0,0) heading right."""
-    s = np.zeros(STATE_SIZE, dtype=np.int64)
-    s[S_DX] = 1
-    return s
-
-
-# =============================================================================
-# Interpreter
-# =============================================================================
-
 def _run_core(grid, max_steps, stack, out_buf, state):
-    """Shared dispatch loop. Numba-friendly: no Python objects, just int ops on
-    pre-allocated arrays. `run(jit=True)` calls a @njit-wrapped copy of this
-    function; `run(jit=False)` calls it unjitted. Resumable: state is mutated
-    in place so callers can drive the interpreter step-by-step (the GUI does
-    exactly that). Returns status (0=halted, 1=step budget exhausted).
+    """
+    Shared dispatch loop.
+
+    Numba-friendly: no Python objects, just int ops on pre-allocated arrays.
+
+    `run(jit=True)` calls a @njit-wrapped copy of this function;
+    `run(jit=False)` calls it unjitted.
+
+    Resumable: state is mutated in place so callers can drive the interpreter
+    step-by-step (the GUI does exactly that).
+
+    Returns status (0=halted, 1=step budget exhausted).
 
     `&` and `~` (interactive input) are treated as `push(0)` since the core
-    can't block on stdin — random programs don't generate these anyway."""
+    can't block on stdin — random programs don't generate these anyway.
+    """
     sp          = int(state[S_SP])
     out_len     = int(state[S_OUT_LEN])
     x           = int(state[S_X])
@@ -352,7 +361,6 @@ def _run_core(grid, max_steps, stack, out_buf, state):
     state[S_STRING_MODE] = 1 if string_mode else 0
     return 0 if halted else 1
 
-
 # Lazily compiled JIT version of _run_core. First `run(..., jit=True)` call
 # pays the compile cost (~1s, cached after); subsequent calls are fast.
 _run_core_jit = njit(cache=True)(_run_core)
@@ -360,9 +368,8 @@ _run_core_jit = njit(cache=True)(_run_core)
 # Reusable buffers — only one set per process. Not threadsafe; this is fine
 # under multiprocessing (one process per worker) but would need rethinking
 # if called from multiple threads.
-_STACK = np.zeros(65536, dtype=np.int64)
-_OUTBUF = np.zeros(8192, dtype=np.int32)
-
+_STACK  = np.zeros(STACK_CAP,  dtype=np.int64)
+_OUTBUF = np.zeros(OUTPUT_CAP, dtype=np.int32)
 
 # =============================================================================
 # Entry points
@@ -385,7 +392,7 @@ def run(src, max_steps=None, out=None, jit=False):
         out.write(''.join(chr(int(b)) for b in _OUTBUF[:n]))
     return 'ok' if status == 0 else 'step_limit'
 
-
+# gui
 if __name__ == '__main__':
     import argparse
     p = argparse.ArgumentParser(

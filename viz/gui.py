@@ -15,7 +15,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from befunge import (
-    W, H, str_to_grid, new_state, _run_core,
+    W, H, STACK_CAP, OUTPUT_CAP, str_to_grid, new_state, _run_core,
     S_SP, S_OUT_LEN, S_X, S_Y, S_DX, S_DY, S_STRING_MODE,
 )
 
@@ -29,8 +29,8 @@ class Interpreter:
 
     def load(self, src):
         self._grid    = str_to_grid(src)
-        self._stack   = np.zeros(65536, dtype=np.int64)
-        self._out_buf = np.zeros(8192, dtype=np.int32)
+        self._stack   = np.zeros(STACK_CAP,  dtype=np.int64)
+        self._out_buf = np.zeros(OUTPUT_CAP, dtype=np.int32)
         self.state    = new_state()
         self.halted   = False
 
