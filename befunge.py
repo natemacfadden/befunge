@@ -11,36 +11,117 @@ import sys
 import numpy as np
 from numba import njit
 
-# Befunge-93 instruction set, grouped by category. Space is a no-op and pads
-# the playfield; newline separates rows in source.
-DIGITS       = '0123456789'
-ARITHMETIC   = '+*-/%'
-LOGIC        = '!`'
-MOVEMENT     = '><^v?_|'
-STRING_MODE  = '"'
-STACK_OPS    = ':\\$'
-OUTPUT       = '.,'
-SKIP         = '#'
-MEMORY       = 'gp'
-INPUT        = '&~'
-HALT         = '@'
-INSTRUCTIONS = DIGITS + ARITHMETIC + LOGIC + MOVEMENT + STRING_MODE + \
-               STACK_OPS + OUTPUT + SKIP + MEMORY + INPUT + HALT
-PLAYFIELD    = INSTRUCTIONS + ' \n'  # chars that can appear in a .bf source file
 
-W, H = 80, 25
+# =============================================================================
+# Language
+# =============================================================================
+# Befunge-93 in brief (see https://esolangs.org/wiki/Befunge for the full
+# reference). A program runs on a "playfield" — for us, a fixed 80x25 grid of
+# ASCII characters. An "instruction pointer" (IP) travels through that grid,
+# stack of int64 values ("in the manner of Forth"). The IP has inertia: it
+# keeps moving in its current cardinal direction until an instruction changes
+# it. While "string mode" is active (toggled by `"`), characters are pushed
+# to the stack as ASCII values instead of being executed.
+#
+# A couple of implementation details worth pinning down:
+#   - The playfield doubles as memory: programs can read/write any cell with
+#     `g`/`p`.
+#   - SP is the stack pointer — index where the next push will land; the top
+#     of the stack is stack[SP-1].
+#
+W, H = 80, 25  # playfield dimensions (columns, rows)
 
-# ord values used inside _run_core; named to read like the chars they represent.
-SPACE = 32; BANG = 33; DQ = 34; HASH = 35; DOLLAR = 36; PCT = 37; AMP = 38
-STAR = 42; PLUS = 43; COMMA = 44; MINUS = 45; DOT = 46; SLASH = 47
-ZERO = 48; NINE = 57; COLON = 58
-LT = 60; GT = 62; QMARK = 63; AT = 64
-BSLASH = 92; CARET = 94; UNDER = 95; BACKTICK = 96
-G_GET = 103; P_PUT = 112; V_DOWN = 118
-PIPE = 124; TILDE = 126
+# INSTRUCTIONS below maps each instruction character to its ord value, with
+# a brief description per op. ALPHABET adds the two chars that can appear
+# on the grid but aren't instructions (space, newline).
+INSTRUCTIONS = {
+    # digits — push value 0..9
+    '0': ord('0'), '1': ord('1'), '2': ord('2'), '3': ord('3'), '4': ord('4'),
+    '5': ord('5'), '6': ord('6'), '7': ord('7'), '8': ord('8'), '9': ord('9'),
+
+    '+':  ord('+'),  # pop a, pop b, push b+a
+    '*':  ord('*'),  # pop a, pop b, push b*a
+    '-':  ord('-'),  # pop a, pop b, push b-a
+    '/':  ord('/'),  # pop a, pop b, push b//a   (0 if a==0)
+    '%':  ord('%'),  # pop a, pop b, push b%a    (0 if a==0)
+
+    '!':  ord('!'),  # logical not: pop v, push 1 if v==0 else 0
+    '`':  ord('`'),  # greater-than: pop a, pop b, push 1 if b>a else 0
+
+    '>':  ord('>'),  # IP right
+    '<':  ord('<'),  # IP left
+    '^':  ord('^'),  # IP up
+    'v':  ord('v'),  # IP down
+    '?':  ord('?'),  # random of the 4 cardinal directions
+    '_':  ord('_'),  # horizontal if: pop v, go right if v==0 else left
+    '|':  ord('|'),  # vertical if:   pop v, go down  if v==0 else up
+
+    '"':  ord('"'),  # toggle stringmode
+
+    ':':  ord(':'),  # duplicate top of stack
+    '\\': ord('\\'), # swap top two
+    '$':  ord('$'),  # pop and discard
+
+    '.':  ord('.'),  # pop v, output str(v) + ' '
+    ',':  ord(','),  # pop v, output chr(v % 256)
+
+    '#':  ord('#'),  # bridge: skip next cell along IP direction
+
+    'g':  ord('g'),  # get: pop y, pop x, push grid[y%H, x%W]
+    'p':  ord('p'),  # put: pop y, pop x, pop v, grid[y%H, x%W] = v % 256
+
+    '&':  ord('&'),  # read integer from stdin (we push 0)
+    '~':  ord('~'),  # read char from stdin    (we push 0)
+
+    '@':  ord('@'),  # halt
+}
+
+ALPHABET = {
+    **INSTRUCTIONS,
+    ' ':  ord(' '),   # no-op padding
+    '\n': ord('\n'),  # row separator in .bf source files
+}
+
+# Aliases for _run_core's dispatch. Reading from the enclosing scope at compile
+# time lets numba fold each comparison to a literal int compare. Names mirror
+# the char they encode.
+SPACE    = ALPHABET[' ']
+BANG     = ALPHABET['!']
+DQ       = ALPHABET['"']
+HASH     = ALPHABET['#']
+DOLLAR   = ALPHABET['$']
+PCT      = ALPHABET['%']
+AMP      = ALPHABET['&']
+STAR     = ALPHABET['*']
+PLUS     = ALPHABET['+']
+COMMA    = ALPHABET[',']
+MINUS    = ALPHABET['-']
+DOT      = ALPHABET['.']
+SLASH    = ALPHABET['/']
+ZERO     = ALPHABET['0']
+NINE     = ALPHABET['9']
+COLON    = ALPHABET[':']
+LT       = ALPHABET['<']
+GT       = ALPHABET['>']
+QMARK    = ALPHABET['?']
+AT       = ALPHABET['@']
+BSLASH   = ALPHABET['\\']
+CARET    = ALPHABET['^']
+UNDER    = ALPHABET['_']
+BACKTICK = ALPHABET['`']
+G_GET    = ALPHABET['g']
+P_PUT    = ALPHABET['p']
+V_DOWN   = ALPHABET['v']
+PIPE     = ALPHABET['|']
+TILDE    = ALPHABET['~']
 
 
-def src_to_grid(src):
+# =============================================================================
+# Source parsing
+# =============================================================================
+
+def str_to_grid(src):
+    """Lay out a .bf source string onto an (H, W) int32 grid, padded with spaces."""
     grid = np.full((H, W), SPACE, dtype=np.int32)
     for y, line in enumerate(src.splitlines()[:H]):
         for x, ch in enumerate(line[:W]):
@@ -48,30 +129,12 @@ def src_to_grid(src):
     return grid
 
 
+# =============================================================================
+# Runtime state
+# =============================================================================
 # The interpreter's pausable runtime state lives in a small int64 array,
 # mutated in place by _run_core so the GUI can pause between steps and so
-# numba can compile the dispatch loop. See https://esolangs.org/wiki/Befunge
-# for the language reference
-#
-# Key terms (quotes from the esolangs page):
-#   - playfield   : "A two-dimensional ... rectangular grid of ASCII
-#                   characters, each generally representing an instruction"
-#                   For us, fixed at 80 cols x 25 rows. Programs can also
-#                   read/write its cells (`g`/`p`), so it doubles as memory
-#   - IP          : "instruction pointer" — the cell currently being executed
-#                   "The instruction pointer has inertia: it can travel to
-#                   any of the four cardinal directions, and keep traveling
-#                   that way until an instruction changes the direction"
-#   - stack       : LIFO of int64 values. Befunge programs "store data on a
-#                   stack in the manner of Forth"
-#   - SP          : stack pointer — index where the next push will land. The
-#                   top of the stack is stack[SP-1]
-#   - string mode : a flag toggled by `"`. "Toggle stringmode (push each
-#                   character's ASCII value all the way up to the next `\"`)"
-#                   While set, characters on the playfield are pushed as
-#                   ASCII rather than executed
-#
-# Indexes into the runtime state array:
+# numba can compile the dispatch loop. Indexes into that array:
 S_SP          = 0  # stack pointer
 S_OUT_LEN     = 1  # bytes written to the output buffer
 S_X           = 2  # IP column
@@ -88,6 +151,10 @@ def new_state():
     s[S_DX] = 1
     return s
 
+
+# =============================================================================
+# Interpreter
+# =============================================================================
 
 def _run_core(grid, max_steps, stack, out_buf, state):
     """Shared dispatch loop. Numba-friendly: no Python objects, just int ops on
@@ -296,13 +363,17 @@ _STACK = np.zeros(65536, dtype=np.int64)
 _OUTBUF = np.zeros(8192, dtype=np.int32)
 
 
+# =============================================================================
+# Entry points
+# =============================================================================
+
 def run(src, max_steps=None, out=None, jit=False):
     """Run a Befunge program. Set `jit=True` for the numba-compiled hot path."""
     if out is None:
         out = sys.stdout
     if max_steps is None:
         max_steps = 1 << 62
-    grid = src_to_grid(src)
+    grid = str_to_grid(src)
     state = new_state()
     # _STACK/_OUTBUF are module-level reusable buffers; we only read up to
     # state[S_OUT_LEN], so stale data past it is harmless.

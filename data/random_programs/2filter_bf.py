@@ -16,9 +16,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))  # project root
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from befunge import PLAYFIELD
+from befunge import ALPHABET
 
-PLAYFIELD_SET = set(PLAYFIELD)
+ALPHABET_SET = set(ALPHABET)
 SANITIZE_RE = re.compile(r'\\x([0-9a-fA-F]{2})')
 
 def unsanitize(s):
@@ -61,7 +61,7 @@ if __name__ == '__main__':
     for rg in range(pf.num_row_groups):
         for rec in pf.read_row_group(rg).to_pylist():
             raw = unsanitize(rec['output'])
-            unk = sum(1 for c in raw if c not in PLAYFIELD_SET)
+            unk = sum(1 for c in raw if c not in ALPHABET_SET)
             frac = unk / len(raw) if raw else 0.0
             if frac > args.max_unk_frac:
                 dropped += 1

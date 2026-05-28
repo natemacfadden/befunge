@@ -17,9 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))  # project root
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from befunge import PLAYFIELD, run
+from befunge import ALPHABET, run
 
-PLAYFIELD_SET = set(PLAYFIELD)
+ALPHABET_SET = set(ALPHABET)
 
 def sanitize(s):
     out = []
@@ -40,7 +40,7 @@ def process_record(args_tuple):
     except Exception:
         status = 'error'
     raw_str = buf.getvalue()[:max_output]
-    unk = Counter(c for c in raw_str if c not in PLAYFIELD_SET)
+    unk = Counter(c for c in raw_str if c not in ALPHABET_SET)
     rec_out = dict(rec)
     rec_out['output'] = sanitize(raw_str)
     rec_out['status'] = status

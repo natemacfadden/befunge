@@ -15,9 +15,9 @@ sys.path.insert(0, os.path.dirname(_HERE))
 
 import pandas as pd
 
-from befunge import PLAYFIELD
+from befunge import ALPHABET
 
-PLAYFIELD_SET = set(PLAYFIELD)
+ALPHABET_SET = set(ALPHABET)
 SANITIZE_RE = re.compile(r'\\x([0-9a-fA-F]{2})')
 
 def unsanitize(s):
@@ -46,7 +46,7 @@ def load_programs(path=None):
     df['output_raw'] = df['output'].map(unsanitize)
     df['output_len'] = df['output_raw'].str.len()
     df['unk_count'] = df['output_raw'].map(
-        lambda s: sum(1 for c in s if c not in PLAYFIELD_SET))
+        lambda s: sum(1 for c in s if c not in ALPHABET_SET))
     df['unk_frac'] = (df['unk_count'] / df['output_len'].clip(lower=1)).where(
         df['output_len'] > 0, 0.0)
     return df
