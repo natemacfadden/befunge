@@ -18,6 +18,16 @@ import pyarrow.parquet as pq
 
 from befunge import run_traced, prune_program
 
+# ----- defaults (override via CLI) -------------------------------------------
+DEFAULT_IN             = os.path.join(_HERE, 'programs.parquet')
+DEFAULT_OUT            = os.path.join(_HERE, 'dataset.parquet')
+DEFAULT_MAX_STEPS      = 20000
+DEFAULT_MAX_OUTPUT     = 4096
+DEFAULT_WORKERS        = os.cpu_count()
+DEFAULT_PROGRESS_EVERY = 10000
+DEFAULT_BATCH_SIZE     = 50000
+DEFAULT_JIT            = True
+
 def sanitize(s):
     out = []
     for c in s:
@@ -60,16 +70,17 @@ def iter_programs(path):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--in', dest='in_path', default=os.path.join(_HERE, 'programs.parquet'))
-    p.add_argument('--out', default=os.path.join(_HERE, 'dataset.parquet'))
-    p.add_argument('--max-steps', type=int, default=20000)
-    p.add_argument('--max-output', type=int, default=4096)
-    p.add_argument('--workers', type=int, default=os.cpu_count())
-    p.add_argument('--progress-every', type=int, default=10000)
+    p.add_argument('--in', dest='in_path', default=DEFAULT_IN)
+    p.add_argument('--out',                 default=DEFAULT_OUT)
+    p.add_argument('--max-steps',      type=int,   default=DEFAULT_MAX_STEPS)
+    p.add_argument('--max-output',     type=int,   default=DEFAULT_MAX_OUTPUT)
+    p.add_argument('--workers',        type=int,   default=DEFAULT_WORKERS)
+    p.add_argument('--progress-every', type=int,   default=DEFAULT_PROGRESS_EVERY)
+    p.add_argument('--batch-size',     type=int,   default=DEFAULT_BATCH_SIZE,
+                   help='records per parquet row-group write')
     p.add_argument('--no-jit', dest='jit', action='store_false',
                    help='disable the numba-JIT interpreter (default: on)')
-    p.add_argument('--batch-size', type=int, default=50000,
-                   help='records per parquet row-group write')
+    p.set_defaults(jit=DEFAULT_JIT)
     args = p.parse_args()
 
     pf = pq.ParquetFile(args.in_path)

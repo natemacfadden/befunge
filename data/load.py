@@ -76,12 +76,13 @@ def load_programs(path=None, n=None):
     df.insert(df.columns.get_loc('output') + 1, 'output_size', out_sizes)
     return df
 
-def to_clipboard(text):
-    """Copy `text` to the system clipboard and print it. Run the GUI separately
-    and Cmd+V to paste — handy for inspecting a program from a DataFrame.
+def to_clipboard(text, echo=True):
+    """Copy `text` to the system clipboard, optionally echoing it.
 
-    If `text` looks like a Python repr of a string (since `load_programs`
-    repr-wraps the program column for display), it's auto-unwrapped first."""
+    Run the GUI separately and Cmd+V to paste — handy for inspecting a
+    program from a DataFrame. Pass `echo=False` to skip the print.
+
+    If `text` looks like a Python repr of a string, it's auto-unwrapped."""
     import ast, platform, subprocess
     if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
         try:
@@ -96,7 +97,8 @@ def to_clipboard(text):
     else:
         cmd = ['clip']
     subprocess.run(cmd, input=text, text=True, check=True)
-    print(text)
+    if echo:
+        print(text)
 
 
 def load_oeis(path=None, parse_ints=True):

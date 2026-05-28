@@ -18,6 +18,12 @@ import pyarrow.parquet as pq
 
 from befunge import ALPHABET
 
+# ----- defaults (override via CLI) -------------------------------------------
+DEFAULT_IN            = os.path.join(_HERE, 'dataset.parquet')
+DEFAULT_OUT           = os.path.join(_HERE, 'dataset_clean.parquet')
+DEFAULT_MAX_UNK_FRAC  = 0.0
+DEFAULT_BATCH_SIZE    = 50000
+
 ALPHABET_SET = set(ALPHABET)
 SANITIZE_RE = re.compile(r'\\x([0-9a-fA-F]{2})')
 
@@ -35,10 +41,10 @@ def unsanitize(s):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--in', dest='in_path', default=os.path.join(_HERE, 'dataset.parquet'))
-    p.add_argument('--out', default=os.path.join(_HERE, 'dataset_clean.parquet'))
-    p.add_argument('--max-unk-frac', type=float, default=0.0)
-    p.add_argument('--batch-size', type=int, default=50000)
+    p.add_argument('--in', dest='in_path', default=DEFAULT_IN)
+    p.add_argument('--out',                default=DEFAULT_OUT)
+    p.add_argument('--max-unk-frac', type=float, default=DEFAULT_MAX_UNK_FRAC)
+    p.add_argument('--batch-size',   type=int,   default=DEFAULT_BATCH_SIZE)
     args = p.parse_args()
 
     kept = dropped = 0
