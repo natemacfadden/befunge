@@ -24,17 +24,25 @@ DEFAULT_OUT        = os.path.join(_HERE, 'programs.parquet')
 DEFAULT_BATCH_SIZE = 50000
 DEFAULT_DENSITY    = 1.0
 DEFAULT_NO_HALT    = False
+DEFAULT_LOCAL_ONLY = False  # if True, also drops `g`/`p` (nonlocal mem ops)
 
 # Drop interactive-input opcodes (block on stdin) and `?` (nondeterministic).
-CHARS               = ''.join(c for c in INSTRUCTIONS if c not in '&~?') + ' '
-CHARS_NO_HALT       = ''.join(c for c in CHARS if c != '@')
-CHARS_BYTES         = np.frombuffer(CHARS.encode('ascii'),         dtype=np.uint8)
-CHARS_BYTES_NO_HALT = np.frombuffer(CHARS_NO_HALT.encode('ascii'), dtype=np.uint8)
+CHARS = ''.join(c for c in INSTRUCTIONS if c not in '&~?') + ' '
 _SPACE = np.uint8(ord(' '))
 _AT    = np.uint8(ord('@'))
 _NL    = np.uint8(ord('\n'))
 
-def generate_batch(seed, start, count, w=80, h=25, density=1.0, allow_halt=True):
+def _char_pool(allow_halt, allow_mem):
+    """Build the uint8 char pool with the requested instructions removed."""
+    pool = CHARS
+    if not allow_halt:
+        pool = pool.replace('@', '')
+    if not allow_mem:
+        pool = pool.replace('g', '').replace('p', '')
+    return np.frombuffer(pool.encode('ascii'), dtype=np.uint8)
+
+def generate_batch(seed, start, count, w=80, h=25, density=1.0,
+                   allow_halt=True, allow_mem=True):
     """Generate `count` programs in one vectorized numpy call. Programs are
     indexed start..start+count-1, but they share entropy from a single batch
     RNG — i.e. no longer reproducible by (seed, idx) alone, only by the
@@ -42,9 +50,12 @@ def generate_batch(seed, start, count, w=80, h=25, density=1.0, allow_halt=True)
 
     `allow_halt=False` removes `@` from the character pool and skips planting
     a guaranteed `@` cell — every generated program will run until it hits
-    the step limit."""
+    the step limit.
+
+    `allow_mem=False` removes `g` and `p` (the nonlocal read/write opcodes)
+    so all execution is purely local along the IP path."""
     rng = np.random.default_rng(np.random.SeedSequence([seed, start]))
-    chars = CHARS_BYTES if allow_halt else CHARS_BYTES_NO_HALT
+    chars = _char_pool(allow_halt, allow_mem)
     mask = rng.random((count, h, w)) < density
     idx  = rng.integers(0, len(chars), size=(count, h, w))
     # Work as a uint8 grid throughout — much faster string assembly via
@@ -74,6 +85,9 @@ if __name__ == '__main__':
     p.add_argument('--no-halt', action='store_true', default=DEFAULT_NO_HALT,
                    help='exclude `@` from the char pool — every program will '
                         'run until the step limit')
+    p.add_argument('--local', action='store_true', default=DEFAULT_LOCAL_ONLY,
+                   help='also exclude `g` and `p` (nonlocal mem ops) so '
+                        'execution stays on the IP path')
     args = p.parse_args()
 
     writer = None
@@ -81,7 +95,8 @@ if __name__ == '__main__':
         batch_count = min(args.batch_size, args.count - batch_start)
         programs = generate_batch(args.seed, batch_start, batch_count,
                                   density=args.density,
-                                  allow_halt=not args.no_halt)
+                                  allow_halt=not args.no_halt,
+                                  allow_mem=not args.local)
         batch = [{'index': batch_start + j, 'seed': args.seed, 'program': prog}
                  for j, prog in enumerate(programs)]
         table = pa.Table.from_pylist(batch)
