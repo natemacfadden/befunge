@@ -47,15 +47,9 @@ def process_record(args_tuple):
         status, raw_str, visited, final_stack = 'error', '', None, []
     raw_str = raw_str[:max_output]
     rec_out = dict(rec)
-    # Only prune when the program halted naturally — then `visited` is the
-    # complete set of cells the program ever needed and the pruned version
-    # is exactly equivalent. For `step_limit` or `error`, we don't know
-    # what cells would have mattered past the truncation point, so we
-    # leave the program untouched.
-    if status == 'ok' and visited is not None:
-        rec_out['program'] = prune_program(program, visited)
-    else:
-        rec_out['program'] = program
+    # prune every cell the run never visited (within the step budget)
+    rec_out['program'] = (prune_program(program, visited)
+                          if visited is not None else program)
     rec_out['output'] = sanitize(raw_str)
     rec_out['status'] = status
     rec_out['final_stack'] = final_stack
@@ -110,8 +104,8 @@ if __name__ == '__main__':
     with ProcessPoolExecutor(args.workers) as pool:
         for i, rec_out in enumerate(
                 pool.map(process_record, work_iter, chunksize=64), 1):
-            # Dedup by the (post-pruning) program text. After pruning, many
-            # source programs collapse to the same minimal form — keep one.
+            # dedup by the (post-pruning) program text. After pruning, many
+            # source programs collapse to the same minimal form — keep one
             if rec_out['program'] in seen:
                 dropped += 1
             else:

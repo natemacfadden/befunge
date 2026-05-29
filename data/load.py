@@ -67,20 +67,20 @@ def load_programs(path=None, n=None, status=None):
         df = pd.concat(chunks, ignore_index=True)
         if n is not None:
             df = df.iloc[:n].copy()
-    # Older datasets carry both `program` (raw) and `pruned_program`. The
+    # older datasets carry both `program` (raw) and `pruned_program`. The
     # raw form has cells the interpreter never touched, so we prefer the
-    # pruned one and drop the raw column.
+    # pruned one and drop the raw column
     if 'pruned_program' in df.columns:
         df['program'] = df['pruned_program']
         df = df.drop(columns=['pruned_program'])
-    # Count "active" (non-space, non-newline) chars via two replaces + len.
-    # Faster on ~1M rows than separate str.count calls.
+    # count "active" (non-space, non-newline) chars via two replaces + len
+    # faster on ~1M rows than separate str.count calls
     sizes = (df['program'].str.replace(' ', '', regex=False)
                           .str.replace('\n', '', regex=False)
                           .str.len())
     df.insert(df.columns.get_loc('program') + 1, 'program_size', sizes)
-    # Output length in actual bytes: each `\xNN` escape (4 chars) was 1 byte,
-    # so subtract 3 chars per escape from the sanitized length.
+    # output length in actual bytes: each `\xNN` escape (4 chars) was 1 byte,
+    # so subtract 3 chars per escape from the sanitized length
     out_sizes = (df['output'].str.len()
                  - 3 * df['output'].str.count(r'\\x[0-9a-fA-F]{2}'))
     df.insert(df.columns.get_loc('output') + 1, 'output_size', out_sizes)
@@ -114,6 +114,6 @@ def to_clipboard(text, echo=True):
 def load_oeis(path=None, parse_ints=True):
     df = pd.read_parquet(_resolve('oeis', 'oeis.parquet', path))
     if parse_ints:
-        # OEIS terms can exceed int64 (factorials, etc.), so use Python ints.
+        # OEIS terms can exceed int64 (factorials, etc.), so use Python ints
         df['sequence'] = df['sequence'].map(lambda s: tuple(int(x) for x in s))
     return df

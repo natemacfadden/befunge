@@ -26,7 +26,7 @@ DEFAULT_DENSITY    = 1.0
 DEFAULT_NO_HALT    = False
 DEFAULT_LOCAL_ONLY = False  # if True, also drops `g`/`p` (nonlocal mem ops)
 
-# Drop interactive-input opcodes (block on stdin) and `?` (nondeterministic).
+# drop interactive-input opcodes (block on stdin) and `?` (nondeterministic)
 CHARS = ''.join(c for c in INSTRUCTIONS if c not in '&~?') + ' '
 _SPACE = np.uint8(ord(' '))
 _AT    = np.uint8(ord('@'))
@@ -58,15 +58,15 @@ def generate_batch(seed, start, count, w=80, h=25, density=1.0,
     chars = _char_pool(allow_halt, allow_mem)
     mask = rng.random((count, h, w)) < density
     idx  = rng.integers(0, len(chars), size=(count, h, w))
-    # Work as a uint8 grid throughout — much faster string assembly via
-    # `tobytes().decode()` than per-program Python `''.join` loops.
+    # work as a uint8 grid throughout — much faster string assembly via
+    # `tobytes().decode()` than per-program Python `''.join` loops
     grid = np.where(mask, chars[idx], _SPACE).astype(np.uint8)
     if allow_halt:
-        # Guarantee at least one `@` per program so some fraction actually halts.
+        # guarantee at least one `@` per program so some fraction actually halts
         rows = rng.integers(0, h, size=count)
         cols = rng.integers(0, w, size=count)
         grid[np.arange(count), rows, cols] = _AT
-    # Append a newline column so each program-row ends with '\n', then flatten.
+    # append a newline column so each program-row ends with '\n', then flatten
     nl_col = np.full((count, h, 1), _NL, dtype=np.uint8)
     flat = np.concatenate([grid, nl_col], axis=2).reshape(count, h * (w + 1))
     return [flat[i].tobytes().decode('ascii').rstrip('\n') for i in range(count)]

@@ -11,7 +11,7 @@ from tkinter import filedialog, font as tkfont
 
 import numpy as np
 
-# Allow `python viz/gui.py` directly, in addition to import from befunge.py.
+# allow `python viz/gui.py` directly, in addition to import from befunge.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from befunge import (
@@ -60,9 +60,9 @@ class Interpreter:
 
     def step(self):
         if self.halted: return
-        # Peek BEFORE stepping: if the IP is about to execute `g`, we can
+        # peek BEFORE stepping: if the IP is about to execute `g`, we can
         # predict exactly which cell it'll read (top two stack values, with
-        # `g` semantics — y on top, x below, wrapped mod (H, W)).
+        # `g` semantics — y on top, x below, wrapped mod (H, W))
         c = int(self._grid[self.y, self.x])
         self.g_target = None
         if not self.string_mode and c == ord('g'):
@@ -135,7 +135,7 @@ class BefungeGrid(tk.Frame):
                                 bd=0, highlightthickness=0, takefocus=editable)
         self.canvas.pack()
 
-        # Grid lines (offset by 0.5 for crisp 1px lines on retina/non-retina).
+        # grid lines (offset by 0.5 for crisp 1px lines on retina/non-retina)
         for c in range(cols + 1):
             self.canvas.create_line(c * cell_w + 0.5, 0,
                                     c * cell_w + 0.5, rows * cell_h,
@@ -145,8 +145,8 @@ class BefungeGrid(tk.Frame):
                                     cols * cell_w, r * cell_h + 0.5,
                                     fill=self.GRID_LINE)
 
-        # Per-cell state. _chars holds what's logically there; _text_ids holds
-        # canvas item ids for any cell that's currently drawn.
+        # per-cell state. _chars holds what's logically there; _text_ids holds
+        # canvas item ids for any cell that's currently drawn
         self._chars         = [[' '] * cols for _ in range(rows)]
         self._text_ids      = {}
         self._ip_rect       = None
@@ -158,8 +158,8 @@ class BefungeGrid(tk.Frame):
         if editable:
             self.canvas.bind('<Button-1>', self._on_click)
             self.canvas.bind('<Key>', self._on_key)
-            # Tk's <<Paste>> maps to the platform shortcut. Explicit bindings
-            # are belt-and-suspenders in case the virtual event doesn't fire.
+            # tk's <<Paste>> maps to the platform shortcut. Explicit bindings
+            # are belt-and-suspenders in case the virtual event doesn't fire
             self.canvas.bind('<<Paste>>',   self._on_paste)
             self.canvas.bind('<Command-v>', self._on_paste)
             self.canvas.bind('<Control-v>', self._on_paste)
@@ -210,8 +210,8 @@ class BefungeGrid(tk.Frame):
                         self._mark_modified(x, y)
 
     def _mark_modified(self, x, y):
-        # Single outline that follows the most recent write — moves rather
-        # than accumulating, so the user always sees where `p` just landed.
+        # single outline that follows the most recent write — moves rather
+        # than accumulating, so the user always sees where `p` just landed
         cx = x * self.cell_w
         cy = y * self.cell_h
         coords = (cx + 1, cy + 1, cx + self.cell_w, cy + self.cell_h)
@@ -276,9 +276,9 @@ class BefungeGrid(tk.Frame):
         ch = self._chars[y][x]
         o = ord(ch)
 
-        # Pick a glyph and color for this cell. Space stays invisible; other
+        # pick a glyph and color for this cell. Space stays invisible; other
         # non-printable bytes get a placeholder. Bytes with no standard glyph
-        # at all (the C1 control area, 128–159) are flagged in red.
+        # at all (the C1 control area, 128–159) are flagged in red
         #   - 0–31 : Unicode "control pictures" (␀ ␁ ␂ … ␟) — gray
         #   - 127  : '␡' (DEL picture) — gray
         #   - 128–159 : '·' (middle dot) — RED (no standard glyph)
@@ -417,8 +417,8 @@ class App:
         right = tk.Frame(self.root)
         right.grid(row=0, column=1, padx=8, pady=8, sticky="n")
 
-        # Fixed-height header rows on both sides so the grids below them start
-        # at the same Y. Tall enough to accommodate a tk.Button on macOS.
+        # fixed-height header rows on both sides so the grids below them start
+        # at the same Y. Tall enough to accommodate a tk.Button on macOS
         HEADER_H = 32
 
         # LEFT: editor header
@@ -433,7 +433,7 @@ class App:
         self.editor_grid.pack(anchor="w")
 
         # RIGHT: execution header (status moves up here so it shares the row
-        # with the Execution label, matching the editor's label+buttons row).
+        # with the Execution label, matching the editor's label+buttons row)
         exec_top = tk.Frame(right, height=HEADER_H)
         exec_top.pack(fill="x", anchor="w")
         exec_top.pack_propagate(False)
@@ -554,9 +554,9 @@ class App:
     def refresh(self, mark_changes=True):
         self.display_grid.update_from_array(self.interp.grid_array, mark_changes=mark_changes)
         self.display_grid.highlight_ip(self.interp.x, self.interp.y)
-        # Show green outline at the most recent `g` read (transient — clears
+        # show green outline at the most recent `g` read (transient — clears
         # on the next refresh unless another `g` fires). For silent syncs
-        # (reset), clear it.
+        # (reset), clear it
         self.display_grid.highlight_g_read(self.interp.g_target if mark_changes else None)
 
         arrow = {(1,0): ">", (-1,0): "<", (0,1): "v", (0,-1): "^"}.get(

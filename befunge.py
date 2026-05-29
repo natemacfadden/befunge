@@ -29,15 +29,15 @@ OUTPUT_CAP = 8192  # max output bytes per _run_core call; rest is truncated
 #
 # A couple of implementation details worth pinning down:
 #   - The playfield doubles as memory: programs can read/write any cell with
-#     `g`/`p`.
+#     `g`/`p`
 #   - SP is the stack pointer — index where the next push will land; the top
-#     of the stack is stack[SP-1].
+#     of the stack is stack[SP-1]
 #
 W, H = 80, 25 # playfield dimensions (columns, rows)
 
 # INSTRUCTIONS below maps each instruction character to its ord value, with
 # a brief description per op. ALPHABET adds the two chars that can appear
-# on the grid but aren't instructions (space, newline).
+# on the grid but aren't instructions (space, newline)
 INSTRUCTIONS = {
     # digits — push value 0..9
     '0': ord('0'), '1': ord('1'), '2': ord('2'), '3': ord('3'), '4': ord('4'),
@@ -105,7 +105,7 @@ def str_to_grid(src):
 # =============================================================================
 # Runtime state
 # =============================================================================
-# The interpreter's pausable runtime state lives in a small int64 array,
+# the interpreter's pausable runtime state lives in a small int64 array,
 # mutated in place by _run_core so the GUI can pause between steps and so
 # numba can compile the dispatch loop. Indexes into that array:
 S_SP          = 0  # stack pointer
@@ -128,8 +128,8 @@ def new_state():
 # =============================================================================
 
 # aliases of ALPHABET for _run_core's dispatch. Reading from the enclosing scope
-# at compile time lets numba fold each comparison to a literal int compare.
-# Names mirror the char they encode.
+# at compile time lets numba fold each comparison to a literal int compare
+# Names mirror the char they encode
 SPACE    = ALPHABET[' ']
 BANG     = ALPHABET['!']
 DQ       = ALPHABET['"']
@@ -289,22 +289,22 @@ def _run_core(grid, max_steps, stack, out_buf, state, visited):
             y = (y + dy) % H
         elif c == G_GET:
             # DEVIATION from Befunge-93 spec: spec says out-of-bounds reads
-            # push 0; we wrap (mod) for symmetry with `p` and IP movement.
-            # Trade-off: very minor, only matters for programs that probe
-            # off-grid cells expecting 0.
+            # push 0; we wrap (mod) for symmetry with `p` and IP movement
+            # trade-off: very minor, only matters for programs that probe
+            # off-grid cells expecting 0
             gy, sp = _pop(stack, sp); gx, sp = _pop(stack, sp)
             gy_w = gy % H
             gx_w = gx % W
             visited[gy_w, gx_w] = 1
             sp = _push(stack, sp, grid[gy_w, gx_w], stack_cap)
         elif c == P_PUT:
-            # The Befunge-93 spec leaves several edge cases of `p` undefined.
-            # We make them errors rather than picking a silent fallback:
-            #   1. Stack underflow (< 3 items) → error, instead of popping 0s.
+            # the Befunge-93 spec leaves several edge cases of `p` undefined
+            # we make them errors rather than picking a silent fallback:
+            #   1. Stack underflow (< 3 items) → error, instead of popping 0s
             #   2. Value v outside the byte range (0..255) → error. A mod-256
             #      wrap would silently corrupt the playground (see fib.bf
-            #      once values exceed 255).
-            # Coords out-of-bounds still wrap (mod), matching `g`.
+            #      once values exceed 255)
+            # coords out-of-bounds still wrap (mod), matching `g`
             if sp < 3:
                 errored = True
             else:
@@ -333,13 +333,13 @@ def _run_core(grid, max_steps, stack, out_buf, state, visited):
         return 2
     return 0 if halted else 1
 
-# Lazily compiled JIT version of _run_core. First `run(..., jit=True)` call
-# pays the compile cost (~1s, cached after); subsequent calls are fast.
+# lazily compiled JIT version of _run_core. First `run(..., jit=True)` call
+# pays the compile cost (~1s, cached after); subsequent calls are fast
 _run_core_jit = njit(cache=True)(_run_core)
 
-# Reusable buffers — only one set per process. Not threadsafe; this is fine
+# reusable buffers — only one set per process. Not threadsafe; this is fine
 # under multiprocessing (one process per worker) but would need rethinking
-# if called from multiple threads.
+# if called from multiple threads
 _STACK  = np.zeros(STACK_CAP,  dtype=np.int64)
 _OUTBUF = np.zeros(OUTPUT_CAP, dtype=np.int32)
 
@@ -360,7 +360,7 @@ def run(src, max_steps=None, out=None, jit=False):
     state = new_state()
     # _STACK/_OUTBUF are module-level reusable buffers; we only read up to
     # state[S_OUT_LEN], so stale data past it is harmless. _VISITED_DUMMY
-    # is the throwaway visited buffer for callers that don't care.
+    # is the throwaway visited buffer for callers that don't care
     core = _run_core_jit if jit else _run_core
     status = core(grid, max_steps, _STACK, _OUTBUF, state, _VISITED_DUMMY)
     n = int(state[S_OUT_LEN])
@@ -394,9 +394,11 @@ def prune_program(src, visited):
     by a space. Only the source characters survive; runtime mutations via
     `p` don't show up here.
 
-    Caveat: only semantically equivalent to the original run if the program
-    halted naturally (`@`). For `step_limit` / `error`, `visited` reflects
-    only what the truncated run touched."""
+    `visited` reflects whatever the IP / `g` touched within the step budget
+    given to `_run_core`. Cells still unvisited at the end are pruned away
+    regardless of status — for `step_limit` / `error` runs that means we're
+    keeping a faithful image of the *observed* execution, not the program's
+    full intent."""
     grid = str_to_grid(src)
     rows = []
     for y in range(H):
