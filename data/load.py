@@ -39,24 +39,34 @@ def _resolve(subdir, default_name, path):
         path = os.path.join(_HERE, subdir, path)
     return path
 
-def load_programs(path=None, n=None):
+def load_programs(path=None, n=None, status=None):
     """Load the random-programs dataset.
 
-    `n`: optional row limit. With `n` set, reads only the first n rows from
-    the parquet via streaming row-group iteration (way faster than loading
-    the whole file and slicing)."""
+    `n`: optional row limit. With `n` set, reads only enough row groups to
+    accumulate `n` matching rows via streaming iteration.
+
+    `status`: optional filter, one of {'ok', 'step_limit', 'error'} (or any
+    subset thereof as an iterable)."""
     path = _resolve('random_programs', 'dataset.parquet', path)
-    if n is None:
+    if isinstance(status, str):
+        status = (status,)
+    if n is None and status is None:
         df = pd.read_parquet(path)
     else:
         pf = pq.ParquetFile(path)
-        chunks, rows = [], 0
-        for batch in pf.iter_batches(batch_size=min(n, 50000)):
-            chunks.append(batch)
-            rows += batch.num_rows
-            if rows >= n:
+        chunks, kept = [], 0
+        target = n if n is not None else float('inf')
+        for batch in pf.iter_batches(batch_size=50000):
+            chunk_df = batch.to_pandas()
+            if status is not None:
+                chunk_df = chunk_df[chunk_df['status'].isin(status)]
+            chunks.append(chunk_df)
+            kept += len(chunk_df)
+            if kept >= target:
                 break
-        df = pa.Table.from_batches(chunks).to_pandas().iloc[:n].copy()
+        df = pd.concat(chunks, ignore_index=True)
+        if n is not None:
+            df = df.iloc[:n].copy()
     # Older datasets carry both `program` (raw) and `pruned_program`. The
     # raw form has cells the interpreter never touched, so we prefer the
     # pruned one and drop the raw column.
