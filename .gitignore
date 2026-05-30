@@ -2,6 +2,7 @@
 *.parquet
 *.png
 *.gz
+*.pt
 
 random/
 
