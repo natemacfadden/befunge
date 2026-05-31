@@ -50,9 +50,11 @@ def process_record(args_tuple):
     # prune every cell the run never visited (within the step budget)
     rec_out['program'] = (prune_program(program, visited)
                           if visited is not None else program)
-    rec_out['output'] = sanitize(raw_str)
-    rec_out['status'] = status
-    rec_out['final_stack'] = final_stack
+    rec_out['output']         = sanitize(raw_str)
+    rec_out['output_size']    = len(raw_str)
+    rec_out['output_uniques'] = len(set(raw_str))
+    rec_out['status']         = status
+    rec_out['final_stack']    = final_stack
     return rec_out
 
 def iter_programs(path):

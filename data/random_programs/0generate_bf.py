@@ -25,6 +25,7 @@ DEFAULT_BATCH_SIZE = 50000
 DEFAULT_DENSITY    = 1.0
 DEFAULT_NO_HALT    = False
 DEFAULT_LOCAL_ONLY = False  # if True, also drops `g`/`p` (nonlocal mem ops)
+DEFAULT_START      = 0      # first program index — bump to append to a prior run
 
 # drop interactive-input opcodes (block on stdin) and `?` (nondeterministic)
 CHARS = ''.join(c for c in INSTRUCTIONS if c not in '&~?') + ' '
@@ -88,11 +89,17 @@ if __name__ == '__main__':
     p.add_argument('--local', action='store_true', default=DEFAULT_LOCAL_ONLY,
                    help='also exclude `g` and `p` (nonlocal mem ops) so '
                         'execution stays on the IP path')
+    p.add_argument('--start', type=int, default=DEFAULT_START,
+                   help='first program index. Programs are deterministic in '
+                        '(seed, batch_start), so e.g. `--start 1000000` '
+                        'produces fresh programs that pick up where a prior '
+                        '`--count 1000000 --start 0` left off')
     args = p.parse_args()
 
     writer = None
-    for batch_start in range(0, args.count, args.batch_size):
-        batch_count = min(args.batch_size, args.count - batch_start)
+    end = args.start + args.count
+    for batch_start in range(args.start, end, args.batch_size):
+        batch_count = min(args.batch_size, end - batch_start)
         programs = generate_batch(args.seed, batch_start, batch_count,
                                   density=args.density,
                                   allow_halt=not args.no_halt,
@@ -103,7 +110,8 @@ if __name__ == '__main__':
         if writer is None:
             writer = pq.ParquetWriter(args.out, table.schema, compression='zstd')
         writer.write_table(table)
-        print(f'  [{batch_start + batch_count}/{args.count}]')
+        print(f'  [{batch_start + batch_count - args.start}/{args.count}]')
     if writer:
         writer.close()
-    print(f'wrote {args.count} programs to {args.out}')
+    print(f'wrote {args.count} programs to {args.out} '
+          f'(indices {args.start}..{end - 1})')
