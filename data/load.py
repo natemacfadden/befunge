@@ -67,23 +67,12 @@ def load_programs(path=None, n=None, status=None):
         df = pd.concat(chunks, ignore_index=True)
         if n is not None:
             df = df.iloc[:n].copy()
-    # older datasets carry both `program` (raw) and `pruned_program`. The
-    # raw form has cells the interpreter never touched, so we prefer the
-    # pruned one and drop the raw column
-    if 'pruned_program' in df.columns:
-        df['program'] = df['pruned_program']
-        df = df.drop(columns=['pruned_program'])
     # count "active" (non-space, non-newline) chars via two replaces + len
     # faster on ~1M rows than separate str.count calls
     sizes = (df['program'].str.replace(' ', '', regex=False)
                           .str.replace('\n', '', regex=False)
                           .str.len())
     df.insert(df.columns.get_loc('program') + 1, 'program_size', sizes)
-    # output length in actual bytes: each `\xNN` escape (4 chars) was 1 byte,
-    # so subtract 3 chars per escape from the sanitized length
-    out_sizes = (df['output'].str.len()
-                 - 3 * df['output'].str.count(r'\\x[0-9a-fA-F]{2}'))
-    df.insert(df.columns.get_loc('output') + 1, 'output_size', out_sizes)
     return df
 
 def to_clipboard(text, echo=True):
